@@ -31,9 +31,36 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
+// ── Simple in-memory rate limiter ────────────────────────────────────────
+// Limits: 10 requests per minute per IP on auth endpoints
+const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+function rateLimit(maxPerMinute: number) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const entry = rateLimitStore.get(ip);
+    if (!entry || now > entry.resetAt) {
+      rateLimitStore.set(ip, { count: 1, resetAt: now + 60_000 });
+      return next();
+    }
+    entry.count++;
+    if (entry.count > maxPerMinute) {
+      return res.status(429).json({ error: 'Too many requests, try again in a minute.' });
+    }
+    next();
+  };
+}
+// Clean up old entries every 5 minutes to avoid memory leak
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitStore) {
+    if (now > entry.resetAt) rateLimitStore.delete(ip);
+  }
+}, 300_000);
+
 // Public
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
-app.use('/api/auth', authRouter);
+app.use('/api/auth', rateLimit(10), authRouter);
 app.use('/api/twitch-creds', twitchCredsRouter);
 app.use('/api/telegram', authenticate, telegramRouter);
 
@@ -152,7 +179,9 @@ async function start() {
       setTimeout(() => { clearInterval(check); resolve(); }, 15000);
     });
 
-    const { rows } = await db.query('SELECT name FROM channels WHERE status != $1', ['disconnected']);
+    // Reset all statuses — we attempt to join every channel on startup regardless of previous state
+    await db.query("UPDATE channels SET status='disconnected'");
+    const { rows } = await db.query('SELECT name FROM channels');
     for (const row of rows) {
       await twitchManager.joinChannel(row.name);
     }

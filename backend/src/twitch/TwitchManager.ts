@@ -161,12 +161,8 @@ export class TwitchManager {
 
     const analysis = state.engine.analyze(username, message);
 
-    const { rows: ignoredRows } = await db.query("SELECT value FROM settings WHERE key='ignored_roles'").catch(() => ({ rows: [] as any[] }));
-    let ignoredRoles: string[] = [];
-    try {
-      if (ignoredRows.length > 0) ignoredRoles = JSON.parse(ignoredRows[0].value);
-    } catch {}
-    const roleIgnored = ignoredRoles.includes(role);
+    const cachedSettings = await this.getCachedSettings();
+    const roleIgnored = cachedSettings.ignoredRoles.includes(role);
 
     await db.query(
       'INSERT INTO messages (channel_name, username, message, spam_score, reasons, role) VALUES ($1,$2,$3,$4,$5,$6)',
@@ -210,12 +206,8 @@ export class TwitchManager {
       }
 
       if (analysis.score >= autoMuteThreshold) {
-        const { rows } = await db.query("SELECT value FROM settings WHERE key='auto_mode'").catch(() => ({ rows: [] as any[] }));
-        const autoModeEnabled = rows.length > 0 ? rows[0].value === 'true' : true;
-        if (autoModeEnabled && state.autoMod !== false) {
-          const durRows = await db.query("SELECT value FROM settings WHERE key='default_mute_duration'").catch(() => ({ rows: [] as any[] }));
-          const duration = durRows.rows.length > 0 ? parseInt(durRows.rows[0].value) : 60;
-          await this.muteUser(channelName, username, duration, 'AUTO');
+        if (cachedSettings.autoMode && state.autoMod !== false) {
+          await this.muteUser(channelName, username, cachedSettings.defaultMuteDuration, 'AUTO');
         }
       }
     }
@@ -302,25 +294,43 @@ export class TwitchManager {
     }
 
     if (client) {
-      try {
-        await client.join(channelName);
+      // If the connected-event auto-rejoin already joined this channel, skip the IRC call
+      const alreadyJoined = primary
+        ? this.connections.get(primary)?.joinedChannels.has(channelName) ?? false
+        : false;
+
+      if (alreadyJoined) {
         state.status = 'connected';
-        if (primary) {
-          const conn = this.connections.get(primary);
-          conn?.joinedChannels.add(channelName);
-          // Make sure global client doesn't double-process
-          if (this.globalClient && this.globalClient !== client) {
-            try { await this.globalClient.part(channelName); } catch {}
-          }
-        }
         await this.updateChannelStatus(channelName, 'connected');
         broadcast(this.wss, { type: 'channel_status', channel: channelName, status: 'connected' });
-        logger.info(`Joined channel: ${channelName} via ${primary || 'global'}`);
-      } catch (err: any) {
-        state.status = 'disconnected';
-        await this.updateChannelStatus(channelName, 'disconnected');
-        broadcast(this.wss, { type: 'channel_status', channel: channelName, status: 'disconnected' });
-        logger.error(`Failed to join ${channelName}: ${err?.message}`);
+        logger.info(`Already in channel: ${channelName} via ${primary}`);
+      } else {
+        try {
+          await client.join(channelName);
+          state.status = 'connected';
+          if (primary) {
+            const conn = this.connections.get(primary);
+            conn?.joinedChannels.add(channelName);
+            // Make sure global client doesn't double-process
+            if (this.globalClient && this.globalClient !== client) {
+              try { await this.globalClient.part(channelName); } catch {}
+            }
+          }
+          await this.updateChannelStatus(channelName, 'connected');
+          broadcast(this.wss, { type: 'channel_status', channel: channelName, status: 'connected' });
+          logger.info(`Joined channel: ${channelName} via ${primary || 'global'}`);
+        } catch (err: any) {
+          // tmi.js throws if already in channel — treat that as success
+          const alreadyErr = /already/i.test(err?.message || '');
+          state.status = alreadyErr ? 'connected' : 'disconnected';
+          await this.updateChannelStatus(channelName, state.status);
+          broadcast(this.wss, { type: 'channel_status', channel: channelName, status: state.status });
+          if (alreadyErr) {
+            logger.info(`Already in channel (caught): ${channelName}`);
+          } else {
+            logger.error(`Failed to join ${channelName}: ${err?.message}`);
+          }
+        }
       }
     } else {
       state.status = 'disconnected';
@@ -492,6 +502,42 @@ export class TwitchManager {
    * Cached per ownerEmail.
    */
   private moderatorIdCache: Map<string, string> = new Map();
+
+  // ── Settings cache (avoids DB hit on every incoming message) ────────────
+  private settingsCache = {
+    ignoredRoles: [] as string[],
+    autoMode: true,
+    defaultMuteDuration: 60,
+    lastFetched: 0,
+  };
+  private readonly SETTINGS_TTL = 10_000; // ms
+
+  private async getCachedSettings() {
+    if (Date.now() - this.settingsCache.lastFetched < this.SETTINGS_TTL) {
+      return this.settingsCache;
+    }
+    try {
+      const { rows } = await db.query(
+        "SELECT key, value FROM settings WHERE key IN ('ignored_roles','auto_mode','default_mute_duration')"
+      );
+      for (const r of rows) {
+        if (r.key === 'ignored_roles') {
+          try { this.settingsCache.ignoredRoles = JSON.parse(r.value); } catch {}
+        } else if (r.key === 'auto_mode') {
+          this.settingsCache.autoMode = r.value === 'true';
+        } else if (r.key === 'default_mute_duration') {
+          this.settingsCache.defaultMuteDuration = parseInt(r.value) || 60;
+        }
+      }
+      this.settingsCache.lastFetched = Date.now();
+    } catch {}
+    return this.settingsCache;
+  }
+
+  /** Invalidate settings cache — call after saving settings */
+  invalidateSettingsCache(): void {
+    this.settingsCache.lastFetched = 0;
+  }
 
   /** Clear moderator_id cache for a user (call after credential change) */
   invalidateModeratorCache(ownerEmail: string | null): void {

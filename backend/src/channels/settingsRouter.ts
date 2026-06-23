@@ -35,6 +35,8 @@ settingsRouter.put('/', async (req: Request, res: Response) => {
       if (updates.mem_window_seconds) engineSettings.memWindowSeconds = parseInt(updates.mem_window_seconds);
       if (updates.link_detection !== undefined) engineSettings.linkDetection = updates.link_detection === 'true';
       if (Object.keys(engineSettings).length) tm.updateGlobalSettings(engineSettings);
+      // Invalidate cached settings so next message reads fresh values
+      tm.invalidateSettingsCache?.();
     }
     res.json({ success: true });
   } catch (err) {
