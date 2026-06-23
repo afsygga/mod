@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+html, body, #root {
+  height: 100%;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #f0f0ff;
+  overflow: hidden;
+  background: #050508;
+}
+
+/* Soft atmospheric gradient — placed at edges, never harsh */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 90% 60% at 15% -25%, rgba(255,200,0,0.018) 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 85% 115%, rgba(126,170,255,0.015) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 45% at 50% 105%, rgba(120,80,200,0.012) 0%, transparent 65%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.012) 1px, transparent 0);
+  background-size: 32px 32px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#root { position: relative; z-index: 1; display: flex; flex-direction: column; }
+
+button { transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1); }
+.glass, .glass-card, .glass-strong, [data-glass] {
+  transition: background 0.22s ease, border-color 0.22s ease;
+}
+
+.glass {
+  background: rgba(255,255,255,0.025);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  border: 1px solid rgba(255,255,255,0.055);
+}
+
+.glass-card {
+  background: rgba(255,255,255,0.03);
+  backdrop-filter: blur(26px) saturate(170%);
+  -webkit-backdrop-filter: blur(26px) saturate(170%);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px;
+  box-shadow: 0 4px 28px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.glass-strong {
+  background: rgba(255,255,255,0.05);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(255,255,255,0.09);
+}
+
+.fade-in { animation: fadeIn 0.3s ease forwards; }
+.fade-in-scale { animation: fadeInScale 0.22s ease forwards; }
+
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.07); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+
+/* Slider — completely native, no scroll-jump */
+input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 160px;
+  height: 4px;
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 4px;
+  background: rgba(255,255,255,0.1);
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  margin-top: -6px;
+  background: #ffffff;
+  cursor: grab;
+  border: 2px solid rgba(255,255,255,0.5);
+  box-shadow: 0 0 14px rgba(255,255,255,0.3);
+}
+input[type=range]::-webkit-slider-thumb:active { cursor: grabbing; }
+input[type=range]::-moz-range-track { height: 4px; border-radius: 4px; background: rgba(255,255,255,0.1); }
+input[type=range]::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #ffffff; cursor: grab;
+  border: 2px solid rgba(255,255,255,0.5);
+}
+
+select {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #f0f0ff;
+  padding: 7px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+}
+select:hover { background: rgba(255,255,255,0.08); }
+select option { background: #0a0a0f; color: #f0f0ff; }
+
+/* Remove ALL default focus borders */
+*, *:focus, *:active, *:hover { outline: none !important; -webkit-tap-highlight-color: transparent; }
+button { -webkit-appearance: none; }
+input, textarea, select, button { -webkit-tap-highlight-color: transparent; }
+
+/* Muted message: fade to gray with strikethrough */
+.queue-muted {
+  animation: muteFade 1.5s ease forwards;
+}
+@keyframes muteFade {
+  0% { opacity: 1; filter: grayscale(0); }
+  100% { opacity: 0.4; filter: grayscale(0.8); }
+}
+
+.queue-muted .username,
+.queue-muted .lastmsg {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
