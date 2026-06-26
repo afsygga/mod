@@ -9,7 +9,7 @@ moderationRouter.post('/mute', async (req: Request, res: Response) => {
   if (!channel || !username) return res.status(400).json({ error: 'channel and username required' });
   try {
     const tm = (global as any).twitchManager;
-    if (tm) await tm.muteUser(channel, username, duration, 'dashboard');
+    if (tm) await tm.muteUser(channel, username, duration, req.user?.email || 'dashboard');
     else {
       await db.query(
         'INSERT INTO moderation_logs (channel_name, username, action, duration_seconds, performed_by) VALUES ($1,$2,$3,$4,$5)',
@@ -28,7 +28,7 @@ moderationRouter.post('/ban', async (req: Request, res: Response) => {
   if (!channel || !username) return res.status(400).json({ error: 'channel and username required' });
   try {
     const tm = (global as any).twitchManager;
-    if (tm) await tm.banUser(channel, username, 'dashboard');
+    if (tm) await tm.banUser(channel, username, req.user?.email || 'dashboard');
     else {
       await db.query(
         'INSERT INTO moderation_logs (channel_name, username, action, performed_by) VALUES ($1,$2,$3,$4)',
