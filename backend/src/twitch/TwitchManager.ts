@@ -436,10 +436,13 @@ export class TwitchManager {
         'SELECT twitch_oauth FROM users WHERE email=$1 AND enabled=true',
         [performedBy]
       );
-      if (rows.length > 0 && rows[0].twitch_oauth) return performedBy;
+      const hasToken = rows.length > 0 && rows[0].twitch_oauth;
+      logger.info(`resolveActorEmail: performedBy=${performedBy} hasToken=${!!hasToken}`);
+      if (hasToken) return performedBy;
     }
     // Fallback to channel primary
     const state = this.channels.get(channelName);
+    logger.info(`resolveActorEmail: fallback to primary=${state?.primaryEmail ?? 'none'}`);
     if (state?.primaryEmail) {
       const { rows } = await db.query(
         'SELECT twitch_oauth FROM users WHERE email=$1 AND enabled=true',
@@ -448,6 +451,7 @@ export class TwitchManager {
       if (rows.length > 0 && rows[0].twitch_oauth) return state.primaryEmail;
     }
     // Fallback to global env
+    logger.info(`resolveActorEmail: using global env bot`);
     return null;
   }
 
