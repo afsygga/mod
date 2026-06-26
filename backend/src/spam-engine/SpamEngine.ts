@@ -211,7 +211,8 @@ export class SpamEngine {
           return { score: 0, reasons: [], similarityPct: 0 };
         }
         // Message is the phrase repeated (kreygasm kreygasm kreygasm)
-        if (msgLower.replace(new RegExp(p, 'g'), '').trim() === '') {
+        const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (msgLower.replace(new RegExp(escaped, 'g'), '').trim() === '') {
           return { score: 0, reasons: [], similarityPct: 0 };
         }
       }
