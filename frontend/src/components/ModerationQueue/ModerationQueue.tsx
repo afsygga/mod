@@ -6,6 +6,7 @@ import { getInitials } from '../../utils/colors';
 import { Avatar } from '../UserCard/Avatar';
 import { api } from '../../hooks/useApi';
 import { T, Lang, muteDurations } from '../../utils/i18n';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface Props {
   items: QueueItem[];
@@ -198,6 +199,7 @@ export function ModerationQueue({ items, onRemove, onMuted, onUserClick, lang }:
   const [muteDurs, setMuteDurs] = useState<Record<string, number>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
+  const isMobile = useIsMobile();
   const t = T[lang];
 
   const getDuration = (id: string) => muteDurs[id] || 600;
@@ -318,8 +320,8 @@ export function ModerationQueue({ items, onRemove, onMuted, onUserClick, lang }:
 
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-          gap: '12px',
+          gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(320px, 1fr))',
+          gap: '10px',
           paddingBottom: selectedIds.size > 0 ? '90px' : '0',
         }}>
           <AnimatePresence mode="popLayout">

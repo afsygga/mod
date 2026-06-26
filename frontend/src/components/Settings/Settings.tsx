@@ -8,6 +8,7 @@ import { SoundSettings } from './SoundSettings';
 import { WhitelistSettings } from './WhitelistSettings';
 import { TelegramSettings } from './TelegramSettings';
 import { Footer } from '../Footer/Footer';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface Props {
   settings: AppSettings;
@@ -234,6 +235,7 @@ const Section = React.memo(function Section({ title, subtitle, children }: { tit
 // Main Settings component
 // ============================================================================
 export function Settings({ settings, channels, onSave, lang }: Props) {
+  const isMobile = useIsMobile();
   const [s, setS] = useState<AppSettings>(settings);
   const [baseline, setBaseline] = useState<AppSettings>(settings);
   const [muteReason, setMuteReason] = useState<string>(
@@ -312,12 +314,13 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
 
   return (
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-      {/* Section sidebar */}
-      <div style={{
+      {/* Section sidebar — hidden on mobile */}
+      <div className="settings-sidebar" style={{
         width: '180px', flexShrink: 0, padding: '20px 12px',
         borderRight: '1px solid rgba(255,255,255,0.04)',
         background: 'rgba(255,255,255,0.012)',
         overflowY: 'auto',
+        display: isMobile ? 'none' : undefined,
       }}>
         <div style={{
           fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
@@ -351,7 +354,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
       </div>
 
       {/* Settings content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
+      <div className="settings-content" style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '14px 16px' : '24px 32px' }}>
         <div style={{ maxWidth: '720px', margin: '0 auto', paddingBottom: '80px' }}>
 
           <div id="sec-detection">

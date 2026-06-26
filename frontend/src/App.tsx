@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutDashboard, ScrollText, Settings as SettingsIcon, Globe, Crown, Star, Gem, Shield, LogOut, ShieldCheck, Twitch } from 'lucide-react';
+import { LayoutDashboard, ScrollText, Settings as SettingsIcon, Globe, Crown, Star, Gem, Shield, LogOut, ShieldCheck, Twitch, Menu, X } from 'lucide-react';
+import { useIsMobile } from './hooks/useIsMobile';
 import { Channel, ChatMessage, QueueItem, AppSettings } from './types';
 import { ChannelManager } from './components/ChannelManager/ChannelManager';
 import { ModerationQueue } from './components/ModerationQueue/ModerationQueue';
@@ -36,6 +37,8 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 export default function App() {
   const { user, loading, logout } = useAuth();
+  const isMobile = useIsMobile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('dashboard');
   const [lang, setLang] = useState<Lang>('en');
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -256,40 +259,55 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-      {/* Topbar — Fossabot style: transparent, soft blur, no visible borders */}
+      {/* Topbar */}
       <div style={{
-        height: '56px', display: 'flex', alignItems: 'center', padding: '0 22px', gap: '14px', flexShrink: 0,
+        height: '56px', display: 'flex', alignItems: 'center',
+        padding: isMobile ? '0 12px' : '0 22px',
+        gap: isMobile ? '8px' : '14px', flexShrink: 0,
         background: 'rgba(8,8,12,0.55)',
         backdropFilter: 'blur(32px) saturate(180%)',
         WebkitBackdropFilter: 'blur(32px) saturate(180%)',
         borderBottom: '1px solid rgba(255,255,255,0.025)',
-        position: 'relative',
-        zIndex: 10,
+        position: 'relative', zIndex: 10,
       }}>
+        {/* Hamburger on mobile */}
+        {isMobile && (
+          <button onClick={() => setSidebarOpen(v => !v)} style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+            background: 'rgba(255,255,255,0.04)', border: 'none', cursor: 'pointer',
+            color: 'rgba(255,255,255,0.7)',
+          }}>
+            <Menu size={18} />
+          </button>
+        )}
+
         <div onClick={() => setTab('dashboard')} title="afsyg.gay" style={{
-          display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', flexShrink: 0,
         }}>
           <img src="/lightning.gif" alt=""
-            style={{ width: '30px', height: '30px', objectFit: 'contain', filter: 'drop-shadow(0 0 12px rgba(255,200,0,0.4))' }} />
-          <span style={{
-            fontWeight: 700, fontSize: '15px', color: '#ffc800',
-            letterSpacing: '-0.005em',
-            textShadow: '0 0 28px rgba(255,200,0,0.35)',
-          }}>afsyg.gay</span>
+            style={{ width: '28px', height: '28px', objectFit: 'contain', filter: 'drop-shadow(0 0 12px rgba(255,200,0,0.4))' }} />
+          {!isMobile && (
+            <span style={{
+              fontWeight: 700, fontSize: '15px', color: '#ffc800',
+              letterSpacing: '-0.005em', textShadow: '0 0 28px rgba(255,200,0,0.35)',
+            }}>afsyg.gay</span>
+          )}
         </div>
 
-        <div style={{ display: 'flex', gap: '4px', flex: 1, marginLeft: '12px' }}>
+        <div style={{ display: 'flex', gap: '4px', flex: 1, marginLeft: isMobile ? '0' : '12px' }}>
           {([
             ['dashboard', t.dashboard, LayoutDashboard],
             ['logs', t.logs, ScrollText],
             ['settings', t.settings, SettingsIcon],
             ...(user.role === 'admin' ? [['admin', 'Admin', ShieldCheck] as const] : []),
           ] as const).map(([id, label, Icon]) => (
-            <button key={id} onClick={() => setTab(id as Tab)} style={tabStyle(id)}
+            <button key={id} onClick={() => setTab(id as Tab)}
+              style={{ ...tabStyle(id), padding: isMobile ? '8px 10px' : '7px 14px', gap: isMobile ? '0' : '7px' }}
               onMouseEnter={e => { if (tab !== id) e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; }}
               onMouseLeave={e => { if (tab !== id) e.currentTarget.style.background = 'transparent'; }}>
-              <Icon size={13} />
-              {label}
+              <Icon size={14} />
+              {!isMobile && label}
               {id === 'dashboard' && totalActive > 0 && (
                 <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '999px', background: 'rgba(240,71,71,0.18)', color: '#ff7070', fontWeight: 700 }}>{totalActive}</span>
               )}
@@ -297,37 +315,37 @@ export default function App() {
           ))}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button onClick={() => setLang(l => l === 'en' ? 'ru' : 'en')}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '7px 12px', borderRadius: '10px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
-              background: 'rgba(255,255,255,0.025)', color: 'rgba(255,255,255,0.55)',
-              border: 'none', outline: 'none',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.025)')}>
-            <Globe size={12} />{lang === 'en' ? 'RU' : 'EN'}
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '8px' }}>
+          {!isMobile && (
+            <button onClick={() => setLang(l => l === 'en' ? 'ru' : 'en')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                padding: '7px 12px', borderRadius: '10px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                background: 'rgba(255,255,255,0.025)', color: 'rgba(255,255,255,0.55)',
+                border: 'none', outline: 'none',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.025)')}>
+              <Globe size={12} />{lang === 'en' ? 'RU' : 'EN'}
+            </button>
+          )}
 
+          {/* WS status dot — always visible */}
           <div style={{
-            display: 'flex', alignItems: 'center', gap: '7px',
-            padding: '7px 12px', borderRadius: '10px',
-            background: 'rgba(255,255,255,0.025)',
-            border: 'none',
-          }}>
-            <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: wsColor, boxShadow: `0 0 6px ${wsColor}`, flexShrink: 0 }} />
-            <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.55)' }}>{wsLabel}</span>
-          </div>
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: '7px', height: '7px', borderRadius: '50%',
+            background: wsColor, boxShadow: `0 0 6px ${wsColor}`, flexShrink: 0,
+          }} title={wsLabel} />
 
           <button onClick={toggleAutoMode} style={{
-            fontSize: '11px', fontWeight: 700, padding: '7px 13px', borderRadius: '10px', cursor: 'pointer',
+            fontSize: '11px', fontWeight: 700,
+            padding: isMobile ? '7px 8px' : '7px 13px',
+            borderRadius: '10px', cursor: 'pointer',
             background: autoMode ? 'rgba(0,200,120,0.1)' : 'rgba(255,255,255,0.025)',
             color: autoMode ? '#00c878' : 'rgba(255,255,255,0.45)',
-            border: 'none', outline: 'none',
-            letterSpacing: '0.03em',
+            border: 'none', outline: 'none', letterSpacing: '0.03em',
           }}>
-            {autoMode ? t.autoOn : t.autoOff}
+            {isMobile ? (autoMode ? '✓' : '○') : (autoMode ? t.autoOn : t.autoOff)}
           </button>
 
           {/* User menu */}
@@ -422,26 +440,69 @@ export default function App() {
 
       {/* Dashboard */}
       {tab === 'dashboard' && (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          {/* Sidebar — Fossabot transparent style */}
-          <div style={{
-            width: '215px', flexShrink: 0, overflowY: 'auto',
-            background: 'rgba(8,8,12,0.4)',
-            backdropFilter: 'blur(28px) saturate(170%)',
-            WebkitBackdropFilter: 'blur(28px) saturate(170%)',
-            borderRight: '1px solid rgba(255,255,255,0.025)',
-          }}>
-            <ChannelManager channels={channels} activeChannel={activeChannel} onSelect={setActiveChannel}
-              onAdd={ch => setChannels(prev => [...prev, ch])}
-              onRemove={name => setChannels(prev => prev.filter(c => c.name !== name))}
-              queueCounts={queueCounts} lang={lang} />
-          </div>
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
+          {/* Sidebar — overlay on mobile, fixed on desktop */}
+          {isMobile ? (
+            <>
+              {/* Backdrop */}
+              {sidebarOpen && (
+                <div onClick={() => setSidebarOpen(false)} style={{
+                  position: 'fixed', inset: 0, zIndex: 40,
+                  background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+                }} />
+              )}
+              {/* Drawer */}
+              <div style={{
+                position: 'fixed', top: 0, left: 0, bottom: 0,
+                width: '280px', zIndex: 50, overflowY: 'auto',
+                background: 'rgba(8,8,12,0.96)',
+                backdropFilter: 'blur(32px)',
+                WebkitBackdropFilter: 'blur(32px)',
+                borderRight: '1px solid rgba(255,255,255,0.06)',
+                transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+                transition: 'transform 0.25s cubic-bezier(0.4,0,0.2,1)',
+              }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.04)',
+                }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#ffc800' }}>afsyg.gay</span>
+                  <button onClick={() => setSidebarOpen(false)} style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'rgba(255,255,255,0.5)', display: 'flex', alignItems: 'center',
+                  }}>
+                    <X size={18} />
+                  </button>
+                </div>
+                <ChannelManager channels={channels} activeChannel={activeChannel}
+                  onSelect={name => { setActiveChannel(name); setSidebarOpen(false); }}
+                  onAdd={ch => setChannels(prev => [...prev, ch])}
+                  onRemove={name => setChannels(prev => prev.filter(c => c.name !== name))}
+                  queueCounts={queueCounts} lang={lang} />
+              </div>
+            </>
+          ) : (
+            <div style={{
+              width: '215px', flexShrink: 0, overflowY: 'auto',
+              background: 'rgba(8,8,12,0.4)',
+              backdropFilter: 'blur(28px) saturate(170%)',
+              WebkitBackdropFilter: 'blur(28px) saturate(170%)',
+              borderRight: '1px solid rgba(255,255,255,0.025)',
+            }}>
+              <ChannelManager channels={channels} activeChannel={activeChannel} onSelect={setActiveChannel}
+                onAdd={ch => setChannels(prev => [...prev, ch])}
+                onRemove={name => setChannels(prev => prev.filter(c => c.name !== name))}
+                queueCounts={queueCounts} lang={lang} />
+            </div>
+          )}
 
           {/* Main */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {/* Stats row */}
             <div style={{
-              display: 'flex', gap: '10px', padding: '14px 18px',
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)',
+              gap: '8px', padding: isMobile ? '10px 12px' : '14px 18px',
               flexShrink: 0,
               borderBottom: '1px solid rgba(255,255,255,0.04)',
             }}>
@@ -452,13 +513,13 @@ export default function App() {
                 { num: channels.length, label: t.channels, color: 'rgba(255,255,255,0.5)' },
               ].map(({ num, label, color }) => (
                 <div key={label} style={{
-                  flex: 1, padding: '11px 16px', borderRadius: '12px',
+                  padding: isMobile ? '9px 12px' : '11px 16px', borderRadius: '12px',
                   background: 'rgba(255,255,255,0.025)',
                   border: '1px solid rgba(255,255,255,0.05)',
                   backdropFilter: 'blur(20px)',
                 }}>
-                  <div style={{ fontSize: '22px', fontWeight: 700, color, lineHeight: 1 }}>{num}</div>
-                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '5px' }}>{label}</div>
+                  <div style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: 700, color, lineHeight: 1 }}>{num}</div>
+                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>{label}</div>
                 </div>
               ))}
             </div>
@@ -484,15 +545,15 @@ export default function App() {
                   }}>
                     {lang === 'ru' ? 'Реагировать с' : 'React after'}:
                   </span>
-                  <div style={{ display: 'flex', gap: '4px' }}>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                     {[1, 2, 3, 4, 5, 7, 10].map(n => (
                       <button key={n} onClick={() => setTrigger(n)} style={{
-                        padding: '5px 12px', borderRadius: '8px', cursor: 'pointer',
+                        padding: '5px 10px', borderRadius: '8px', cursor: 'pointer',
                         fontSize: '11px', fontWeight: 700,
                         background: current === n ? 'rgba(255,200,0,0.15)' : 'rgba(255,255,255,0.025)',
                         color: current === n ? '#ffc800' : 'rgba(255,255,255,0.45)',
                         border: 'none', outline: 'none',
-                        minWidth: '34px',
+                        minWidth: '32px',
                       }}>
                         ×{n}
                       </button>
