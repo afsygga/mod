@@ -21,9 +21,7 @@ services:
       retries: 5
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/afsygga/afs-backend:latest
     container_name: twitchmod_backend
     restart: unless-stopped
     depends_on:
@@ -49,12 +47,7 @@ services:
       - ./backend/logs:/app/logs
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
-        VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:4000}
+    image: ghcr.io/afsygga/afs-frontend:latest
     container_name: twitchmod_frontend
     restart: unless-stopped
     depends_on:
