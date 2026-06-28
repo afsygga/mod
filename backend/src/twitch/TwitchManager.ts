@@ -840,7 +840,12 @@ export class TwitchManager {
         logger.info(`Restored ${rows.length} open stream session(s)`);
       }).catch(() => {});
     this.streamPollInterval = setInterval(() => this.pollStreams(), 60_000);
-    setTimeout(() => this.pollStreams(), 8_000);
+    // Delay first poll until channels are likely joined (30s)
+    setTimeout(() => this.pollStreams(), 30_000);
+  }
+
+  async pollStreamsPublic(): Promise<void> {
+    return this.pollStreams();
   }
 
   private async pollStreams(): Promise<void> {
@@ -851,8 +856,12 @@ export class TwitchManager {
       const headers = await this.getHelixHeaders(null);
       const query = channelNames.map(c => `user_login=${encodeURIComponent(c)}`).join('&');
       const res = await fetch(`https://api.twitch.tv/helix/streams?${query}&first=100`, { headers });
-      if (!res.ok) return;
+      if (!res.ok) {
+        logger.warn(`pollStreams: Helix returned ${res.status}`);
+        return;
+      }
       const data = await res.json() as any;
+      logger.info(`pollStreams: checked ${channelNames.join(',')} → ${(data.data||[]).length} live`);
 
       const liveNowIds = new Set<string>();
 
@@ -881,12 +890,12 @@ export class TwitchManager {
           `, [streamId, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, ch]);
 
           if ((rowCount ?? 0) === 0) {
-            // No existing session — insert fresh row
+            // No existing open session — insert fresh row
             await db.query(
               `INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers, twitch_stream_id)
-               VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (twitch_stream_id) DO NOTHING`,
+               VALUES ($1, $2, $3, $4, $5, $6)`,
               [ch, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, streamId]
-            );
+            ).catch(() => {}); // ignore if unique constraint fires (race)
           }
 
           this.liveStreamIds.set(streamId, ch);

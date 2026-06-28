@@ -202,6 +202,8 @@ async function start() {
     for (const row of rows) {
       await twitchManager.joinChannel(row.name);
     }
+    // Trigger immediate stream poll now that channels are joined
+    setTimeout(() => twitchManager.pollStreamsPublic(), 3_000);
   } catch (err) {
     logger.error('Startup failed', err);
     process.exit(1);
