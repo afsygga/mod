@@ -46,3 +46,4 @@ jobs:
           build-args: |
             VITE_API_URL=https://afsyg.gay/backend
             VITE_WS_URL=wss://afsyg.gay/ws
+            VITE_GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}

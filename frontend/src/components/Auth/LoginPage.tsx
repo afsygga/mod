@@ -19,6 +19,10 @@ export function LoginPage() {
   const btnRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Use build-time env var first (always available, even when backend is down)
+    const buildTimeId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+    if (buildTimeId) { setClientId(buildTimeId); return; }
+    // Fallback: fetch from backend
     fetch(`${BASE}/api/auth/config`).then(r => r.json()).then(d => setClientId(d.google_client_id)).catch(() => {});
   }, []);
 
