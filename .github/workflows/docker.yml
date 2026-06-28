@@ -48,5 +48,6 @@ jobs:
           build-args: |
             VITE_API_URL=https://afsyg.gay/backend
             VITE_WS_URL=wss://afsyg.gay/ws
+            VITE_COMMIT_SHA=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
