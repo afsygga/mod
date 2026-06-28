@@ -337,6 +337,19 @@ export class SpamEngine {
       else if (emojiRepeats >= 1) { score += 30; reasons.push('emoji repeat'); }
     }
 
+    // 4c. EMOTE FLOOD — detect Twitch emote spam (words like CamelCase/CAPS tokens, no punctuation)
+    // Custom 7TV/BTTV/FFZ emotes are plain text tokens that survive normalize(), so they
+    // won't be caught by the emoji path above. We detect them separately.
+    const isEmoteOnly = (msg: string) =>
+      msg.trim().length > 0 &&
+      /^([A-Za-zА-Яа-яЁё0-9]+\s*)+$/.test(msg.trim()) &&
+      msg.trim().split(/\s+/).every(w => /^[A-Z][a-zA-Z0-9]+$/.test(w) || /^[A-Z0-9]{2,}$/.test(w));
+    if (isEmoteOnly(message)) {
+      const emoteRepeats = previousMessages.filter(m => isEmoteOnly(m) && editRatio(m, message) >= 0.6).length;
+      if (emoteRepeats >= 2) { score += 50; reasons.push('emote flood'); }
+      else if (emoteRepeats >= 1) { score += 30; reasons.push('emote repeat'); }
+    }
+
     // 5. REGEX — repetitive syllables/chars
     if (hasRepetitivePattern(message)) {
       score += 25;
