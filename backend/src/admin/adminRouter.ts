@@ -148,13 +148,22 @@ adminRouter.get('/stats/timeline', async (_req: Request, res: Response) => {
 });
 
 // Moderator leaderboard — who muted/banned/dismissed how many
-adminRouter.get('/stats/moderators', async (_req: Request, res: Response) => {
+// ?channel=channelname to filter by channel
+adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {
   try {
+    const channel = req.query.channel as string | undefined;
+    const params: any[] = [];
+    const channelFilter = channel
+      ? `AND ml.channel_name = $${params.push(channel)}`
+      : '';
+
     const { rows } = await db.query(`
       SELECT
         ml.performed_by,
         u.name AS display_name,
-        u.picture,
+        u.twitch_username,
+        tm.profile_image_url AS twitch_avatar,
+        tm.display_name AS twitch_display_name,
         COUNT(*) FILTER (WHERE ml.action='MUTED')::int AS mutes,
         COUNT(*) FILTER (WHERE ml.action='AUTO_MUTED')::int AS auto_mutes,
         COUNT(*) FILTER (WHERE ml.action='BANNED')::int AS bans,
@@ -163,11 +172,12 @@ adminRouter.get('/stats/moderators', async (_req: Request, res: Response) => {
         MAX(ml.created_at) AS last_action
       FROM moderation_logs ml
       LEFT JOIN users u ON u.email = ml.performed_by
-      WHERE ml.performed_by NOT IN ('AUTO', 'console')
-      GROUP BY ml.performed_by, u.name, u.picture
+      LEFT JOIN twitch_user_meta tm ON tm.username = LOWER(u.twitch_username)
+      WHERE ml.performed_by NOT IN ('AUTO', 'console') ${channelFilter}
+      GROUP BY ml.performed_by, u.name, u.twitch_username, tm.profile_image_url, tm.display_name
       ORDER BY total DESC
       LIMIT 50
-    `);
+    `, params);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'moderator stats failed' });

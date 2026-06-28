@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { BarChart2, Radio, Trophy, Calendar, Clock, Users, Zap, Shield } from 'lucide-react';
+import { BarChart2, Radio, Trophy, Calendar, Clock, Users, Zap, Shield, ChevronDown } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 interface ModeratorStat {
   performed_by: string;
   display_name: string | null;
-  picture: string | null;
+  twitch_username: string | null;
+  twitch_avatar: string | null;
+  twitch_display_name: string | null;
   mutes: number;
   auto_mutes: number;
   bans: number;
@@ -63,10 +65,12 @@ function duration(sec: number) {
   return h > 0 ? `${h}ч ${m}м` : `${m}м`;
 }
 
-function shortName(performed_by: string, display_name: string | null) {
-  if (display_name) return display_name;
-  if (performed_by.includes('@')) return performed_by.split('@')[0];
-  return performed_by;
+function bestName(m: ModeratorStat) {
+  if (m.twitch_display_name) return m.twitch_display_name;
+  if (m.twitch_username) return m.twitch_username;
+  if (m.display_name) return m.display_name;
+  if (m.performed_by.includes('@')) return m.performed_by.split('@')[0];
+  return m.performed_by;
 }
 
 // ─── mini bar ─────────────────────────────────────────────────────────────────
@@ -222,19 +226,34 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
 export function Analytics() {
   const [moderators, setModerators] = useState<ModeratorStat[]>([]);
   const [streams, setStreams] = useState<StreamSession[]>([]);
+  const [channels, setChannels] = useState<string[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState<string>('');
   const [selectedStream, setSelectedStream] = useState<number | null>(null);
   const [section, setSection] = useState<'mods' | 'streams'>('mods');
   const [loading, setLoading] = useState(true);
+  const [modsLoading, setModsLoading] = useState(false);
 
+  // Load channels list + streams on mount
   useEffect(() => {
     Promise.all([
-      api.get<ModeratorStat[]>('/api/admin/stats/moderators'),
+      api.get<{ name: string }[]>('/api/channels'),
       api.get<StreamSession[]>('/api/admin/streams'),
-    ]).then(([mods, strms]) => {
-      setModerators(mods);
+    ]).then(([chs, strms]) => {
+      const names = chs.map(c => c.name);
+      setChannels(names);
       setStreams(strms);
+      if (names.length > 0) setSelectedChannel(names[0]);
     }).finally(() => setLoading(false));
   }, []);
+
+  // Load moderators when channel changes
+  useEffect(() => {
+    if (!selectedChannel) return;
+    setModsLoading(true);
+    api.get<ModeratorStat[]>(`/api/admin/stats/moderators?channel=${encodeURIComponent(selectedChannel)}`)
+      .then(setModerators)
+      .finally(() => setModsLoading(false));
+  }, [selectedChannel]);
 
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>
@@ -278,47 +297,103 @@ export function Analytics() {
         {/* ── MODERATORS ── */}
         {section === 'mods' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-            <Card title="Статистика модераторов" icon={Trophy}>
-              {moderators.length === 0 ? (
-                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)' }}>Нет данных</div>
-              ) : moderators.map((m, i) => (
-                <div key={m.performed_by} style={{
-                  display: 'flex', alignItems: 'center', gap: '12px',
-                  padding: '10px 0',
-                  borderBottom: i < moderators.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
-                }}>
-                  {/* Rank */}
-                  <span style={{ fontSize: '12px', fontWeight: 800, color: i === 0 ? '#ffc800' : i === 1 ? '#aaaaaa' : i === 2 ? '#cd7f32' : 'rgba(255,255,255,0.2)', minWidth: '20px' }}>
-                    #{i + 1}
-                  </span>
+            {/* Channel selector */}
+            {channels.length > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Канал:</span>
+                <div style={{ position: 'relative' }}>
+                  <select
+                    value={selectedChannel}
+                    onChange={e => setSelectedChannel(e.target.value)}
+                    style={{
+                      appearance: 'none', padding: '7px 32px 7px 12px', borderRadius: '10px',
+                      background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+                      color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none',
+                    }}>
+                    {channels.map(ch => <option key={ch} value={ch}>{ch}</option>)}
+                  </select>
+                  <ChevronDown size={12} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.4)', pointerEvents: 'none' }} />
+                </div>
+              </div>
+            )}
 
-                  {/* Avatar */}
-                  {m.picture ? (
-                    <img src={m.picture} alt="" style={{ width: '28px', height: '28px', borderRadius: '50%', flexShrink: 0 }} />
-                  ) : (
-                    <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
-                      {shortName(m.performed_by, m.display_name)[0]?.toUpperCase()}
-                    </div>
-                  )}
+            <Card title={`Модераторы — ${selectedChannel || '...'}`} icon={Trophy}>
+              {modsLoading ? (
+                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', padding: '12px 0' }}>Загрузка...</div>
+              ) : moderators.length === 0 ? (
+                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', padding: '12px 0' }}>
+                  Нет действий на этом канале
+                </div>
+              ) : moderators.map((m, i) => {
+                const name = bestName(m);
+                const rankColor = i === 0 ? '#ffc800' : i === 1 ? '#aaaaaa' : i === 2 ? '#cd7f32' : 'rgba(255,255,255,0.2)';
+                return (
+                  <div key={m.performed_by} style={{
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    padding: '12px 0',
+                    borderBottom: i < moderators.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                  }}>
+                    {/* Rank */}
+                    <span style={{ fontSize: '12px', fontWeight: 800, color: rankColor, minWidth: '22px', textAlign: 'center' }}>
+                      #{i + 1}
+                    </span>
 
-                  {/* Name + bar */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {shortName(m.performed_by, m.display_name)}
-                      </span>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#fff', marginLeft: '8px', flexShrink: 0 }}>{m.total}</span>
+                    {/* Twitch avatar */}
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      {m.twitch_avatar ? (
+                        <img src={m.twitch_avatar} alt={name}
+                          style={{ width: '36px', height: '36px', borderRadius: '50%', display: 'block', border: `2px solid ${rankColor}44` }} />
+                      ) : (
+                        <div style={{
+                          width: '36px', height: '36px', borderRadius: '50%', flexShrink: 0,
+                          background: 'rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center',
+                          justifyContent: 'center', fontSize: '14px', fontWeight: 700,
+                          color: 'rgba(255,255,255,0.4)', border: `2px solid ${rankColor}44`,
+                        }}>
+                          {name[0]?.toUpperCase()}
+                        </div>
+                      )}
+                      {/* Twitch purple dot */}
+                      {m.twitch_username && (
+                        <div style={{
+                          position: 'absolute', bottom: '-1px', right: '-1px',
+                          width: '12px', height: '12px', borderRadius: '50%',
+                          background: '#9147ff', border: '2px solid rgba(5,5,8,1)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          <svg width="7" height="7" viewBox="0 0 24 24" fill="white">
+                            <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/>
+                          </svg>
+                        </div>
+                      )}
                     </div>
-                    <MiniBar value={m.total} max={maxTotal} color="#ffc800" />
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '5px', fontSize: '10px' }}>
-                      {m.mutes > 0 && <span style={{ color: '#ffc800' }}>🔇 {m.mutes}</span>}
-                      {m.auto_mutes > 0 && <span style={{ color: '#ff9800' }}>🤖 {m.auto_mutes}</span>}
-                      {m.bans > 0 && <span style={{ color: '#ff5959' }}>🔨 {m.bans}</span>}
-                      {m.unbans > 0 && <span style={{ color: '#00c878' }}>✅ {m.unbans}</span>}
+
+                    {/* Name + stats */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                        <div>
+                          <span style={{ fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>
+                            {name}
+                          </span>
+                          {m.twitch_username && m.twitch_display_name !== m.twitch_username && (
+                            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginLeft: '6px' }}>
+                              @{m.twitch_username}
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: '13px', fontWeight: 800, color: '#fff', marginLeft: '8px', flexShrink: 0 }}>{m.total}</span>
+                      </div>
+                      <MiniBar value={m.total} max={maxTotal} color={rankColor === 'rgba(255,255,255,0.2)' ? '#ffc800' : rankColor} />
+                      <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '10px', flexWrap: 'wrap' }}>
+                        {m.mutes > 0 && <span style={{ color: '#ffc800' }}>🔇 {m.mutes} мут</span>}
+                        {m.auto_mutes > 0 && <span style={{ color: '#ff9800' }}>🤖 {m.auto_mutes} авто</span>}
+                        {m.bans > 0 && <span style={{ color: '#ff5959' }}>🔨 {m.bans} бан</span>}
+                        {m.unbans > 0 && <span style={{ color: '#00c878' }}>✅ {m.unbans} разбан</span>}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </Card>
 
             {/* Legend */}
