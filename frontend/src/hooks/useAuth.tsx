@@ -33,8 +33,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     const t = localStorage.getItem(TOKEN_KEY);
     if (!t) { setUser(null); setLoading(false); return; }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const r = await fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${t}` } });
+      const r = await fetch(`${BASE}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${t}` },
+        signal: controller.signal,
+      });
       if (!r.ok) {
         localStorage.removeItem(TOKEN_KEY);
         setToken(null); setUser(null);
@@ -43,8 +48,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(d.user);
       }
     } catch {
+      // Network error or timeout — stay logged in optimistically, retry later
       setUser(null);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);
