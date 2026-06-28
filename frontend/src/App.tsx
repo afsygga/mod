@@ -689,6 +689,16 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      {/* Version badge */}
+      <div style={{
+        position: 'fixed', bottom: '10px', right: '12px',
+        fontSize: '10px', color: 'rgba(255,255,255,0.2)',
+        fontFamily: 'monospace', letterSpacing: '0.04em',
+        pointerEvents: 'none', userSelect: 'none', zIndex: 9999,
+      }}>
+        {__APP_VERSION__}
+      </div>
     </div>
   );
 }
