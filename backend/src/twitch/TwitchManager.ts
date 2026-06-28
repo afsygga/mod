@@ -828,13 +828,19 @@ export class TwitchManager {
   // STREAM SESSION POLLER — polls Helix /streams every 60s
   // ============================================================================
   private streamPollInterval: ReturnType<typeof setInterval> | null = null;
-  private liveChannels: Set<string> = new Set(); // currently detected as live
+  // twitch stream_id → channel_name, persists across polls to detect end
+  public liveStreamIds: Map<string, string> = new Map();
 
   startStreamPoller(): void {
     if (this.streamPollInterval) return;
+    // On startup restore open sessions from DB so restarts don't create dupes
+    db.query(`SELECT channel_name, twitch_stream_id FROM stream_sessions WHERE ended_at IS NULL AND twitch_stream_id IS NOT NULL`)
+      .then(({ rows }) => {
+        for (const r of rows) this.liveStreamIds.set(r.twitch_stream_id, r.channel_name);
+        logger.info(`Restored ${rows.length} open stream session(s)`);
+      }).catch(() => {});
     this.streamPollInterval = setInterval(() => this.pollStreams(), 60_000);
-    // First poll after short delay so DB migrations are done
-    setTimeout(() => this.pollStreams(), 5_000);
+    setTimeout(() => this.pollStreams(), 8_000);
   }
 
   private async pollStreams(): Promise<void> {
@@ -847,42 +853,45 @@ export class TwitchManager {
       const res = await fetch(`https://api.twitch.tv/helix/streams?${query}&first=100`, { headers });
       if (!res.ok) return;
       const data = await res.json() as any;
-      const liveNow = new Set<string>((data.data || []).map((s: any) => s.user_login.toLowerCase()));
 
-      // Detect stream starts
+      const liveNowIds = new Set<string>();
+
       for (const stream of (data.data || [])) {
         const ch = stream.user_login.toLowerCase();
-        if (!this.liveChannels.has(ch)) {
-          // Stream just started — open a new session
+        const streamId: string = stream.id;
+        liveNowIds.add(streamId);
+
+        if (!this.liveStreamIds.has(streamId)) {
+          // New stream ID = genuinely new stream start
           await db.query(
-            `INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers)
-             VALUES ($1, NOW(), $2, $3, $4)`,
-            [ch, stream.title || null, stream.game_name || null, stream.viewer_count || 0]
+            `INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers, twitch_stream_id)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (twitch_stream_id) DO NOTHING`,
+            [ch, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, streamId]
           );
-          logger.info(`Stream started: ${ch}`);
+          this.liveStreamIds.set(streamId, ch);
+          logger.info(`Stream started: ${ch} (${streamId})`);
         } else {
-          // Stream ongoing — update peak viewers
+          // Ongoing — update title/game/peak_viewers
           await db.query(
-            `UPDATE stream_sessions SET peak_viewers = GREATEST(peak_viewers, $1)
-             WHERE channel_name=$2 AND ended_at IS NULL`,
-            [stream.viewer_count || 0, ch]
+            `UPDATE stream_sessions SET peak_viewers = GREATEST(peak_viewers, $1), title=$2, game=$3
+             WHERE twitch_stream_id=$4`,
+            [stream.viewer_count || 0, stream.title || null, stream.game_name || null, streamId]
           );
         }
       }
 
-      // Detect stream ends
-      for (const ch of this.liveChannels) {
-        if (!liveNow.has(ch)) {
+      // Detect stream ends — stream IDs no longer in liveNow
+      for (const [streamId, ch] of this.liveStreamIds) {
+        if (!liveNowIds.has(streamId)) {
           await db.query(
-            `UPDATE stream_sessions SET ended_at=NOW()
-             WHERE channel_name=$1 AND ended_at IS NULL`,
-            [ch]
+            `UPDATE stream_sessions SET ended_at=NOW() WHERE twitch_stream_id=$1 AND ended_at IS NULL`,
+            [streamId]
           );
-          logger.info(`Stream ended: ${ch}`);
+          this.liveStreamIds.delete(streamId);
+          logger.info(`Stream ended: ${ch} (${streamId})`);
         }
       }
-
-      this.liveChannels = liveNow;
     } catch (err) {
       logger.error('pollStreams error', err);
     }

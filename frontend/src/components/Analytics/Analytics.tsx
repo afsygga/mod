@@ -401,6 +401,24 @@ export function Analytics() {
         {/* ── STREAMS ── */}
         {section === 'streams' && !selectedStream && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            {streams.length > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
+                <button onClick={async () => {
+                  if (!confirm('Удалить все записи стримов?')) return;
+                  await api.delete('/api/admin/streams');
+                  setStreams([]);
+                }} style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  padding: '7px 14px', borderRadius: '9px', border: '1px solid rgba(240,71,71,0.2)',
+                  background: 'rgba(240,71,71,0.06)', color: 'rgba(255,100,100,0.7)',
+                  fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(240,71,71,0.14)'; e.currentTarget.style.color = '#ff7070'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(240,71,71,0.06)'; e.currentTarget.style.color = 'rgba(255,100,100,0.7)'; }}>
+                  <RotateCcw size={11} /> Очистить историю
+                </button>
+              </div>
+            )}
             {streams.length === 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '60px 20px', textAlign: 'center', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)' }}>
                 <Radio size={28} style={{ color: 'rgba(255,255,255,0.12)' }} />

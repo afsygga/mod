@@ -309,6 +309,19 @@ adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {
   }
 });
 
+// Clear all stream sessions
+adminRouter.delete('/streams', async (_req: Request, res: Response) => {
+  try {
+    await db.query('TRUNCATE stream_sessions RESTART IDENTITY');
+    // Also reset in-memory poller state
+    const tm = (global as any).twitchManager;
+    if (tm?.liveStreamIds) tm.liveStreamIds.clear();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'clear failed' });
+  }
+});
+
 // Stream sessions list
 adminRouter.get('/streams', async (req: Request, res: Response) => {
   try {

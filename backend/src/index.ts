@@ -147,6 +147,8 @@ async function runMigrations() {
     `);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_streams_channel ON stream_sessions(channel_name)`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_streams_started ON stream_sessions(started_at DESC)`);
+    await db.query(`ALTER TABLE stream_sessions ADD COLUMN IF NOT EXISTS twitch_stream_id VARCHAR(32)`);
+    await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_streams_twitch_id ON stream_sessions(twitch_stream_id) WHERE twitch_stream_id IS NOT NULL`);
     logger.info('Migrations applied');
   } catch (err) {
     logger.error('Migration failed', err);
