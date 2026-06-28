@@ -231,7 +231,7 @@ export function Analytics() {
     setModsError(null);
     api.get<any>(`/api/admin/channels/${encodeURIComponent(ch)}/moderators`)
       .then(data => {
-        if (Array.isArray(data)) { setMods(data); setModsError(null); }
+        if (Array.isArray(data)) { setMods(data); setModsError(null); setModsLoading(false); }
         else loadModsFromLogs(ch);
       })
       .catch(() => loadModsFromLogs(ch));
