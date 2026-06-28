@@ -37,7 +37,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export default function App() {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, networkError, logout } = useAuth();
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('dashboard');
@@ -207,13 +207,27 @@ export default function App() {
   }, [user]);
 
   // === AUTH GATES ===
-  if (loading) {
+  if (loading || networkError) {
     return (
       <div style={{
-        height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: 'rgba(255,255,255,0.4)', fontSize: '13px',
+        height: '100vh', display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: '12px',
       }}>
-        Загрузка...
+        <div style={{
+          width: '32px', height: '32px', borderRadius: '50%',
+          border: '2px solid rgba(255,255,255,0.08)',
+          borderTop: '2px solid rgba(255,255,255,0.5)',
+          animation: 'spin 0.8s linear infinite',
+        }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.35)' }}>
+          {networkError ? 'Переподключение к серверу...' : 'Загрузка...'}
+        </span>
+        {networkError && (
+          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.2)' }}>
+            повтор каждые 5 секунд
+          </span>
+        )}
       </div>
     );
   }

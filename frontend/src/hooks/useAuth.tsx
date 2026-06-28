@@ -16,6 +16,7 @@ interface Ctx {
   user: AuthUser | null;
   token: string | null;
   loading: boolean;
+  networkError: boolean;
   error: string | null;
   loginWithGoogle: (credential: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
@@ -28,33 +29,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
   const [loading, setLoading] = useState(true);
+  const [networkError, setNetworkError] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const t = localStorage.getItem(TOKEN_KEY);
-    if (!t) { setUser(null); setLoading(false); return; }
+    if (!t) { setUser(null); setLoading(false); setNetworkError(false); return; }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 6000);
     try {
       const r = await fetch(`${BASE}/api/auth/me`, {
         headers: { Authorization: `Bearer ${t}` },
         signal: controller.signal,
       });
-      if (!r.ok) {
+      if (r.status === 401) {
+        // Token explicitly rejected — log out
         localStorage.removeItem(TOKEN_KEY);
-        setToken(null); setUser(null);
+        setToken(null); setUser(null); setNetworkError(false);
+      } else if (!r.ok) {
+        // Server error — keep token, show reconnecting
+        setNetworkError(true);
       } else {
         const d = await r.json();
         setUser(d.user);
+        setNetworkError(false);
       }
     } catch {
-      // Network error or timeout — stay logged in optimistically, retry later
-      setUser(null);
+      // Network error or timeout — keep token, retry later
+      setNetworkError(true);
     } finally {
       clearTimeout(timeout);
       setLoading(false);
     }
   }, []);
+
+  // Retry every 5s when network error
+  useEffect(() => {
+    if (!networkError) return;
+    const id = setInterval(() => refresh(), 5000);
+    return () => clearInterval(id);
+  }, [networkError, refresh]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -98,7 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthCtx.Provider value={{ user, token, loading, error, loginWithGoogle, logout, refresh }}>
+    <AuthCtx.Provider value={{ user, token, loading, networkError, error, loginWithGoogle, logout, refresh }}>
       {children}
     </AuthCtx.Provider>
   );
