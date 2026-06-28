@@ -862,15 +862,35 @@ export class TwitchManager {
         liveNowIds.add(streamId);
 
         if (!this.liveStreamIds.has(streamId)) {
-          // New stream ID = genuinely new stream start
-          await db.query(
-            `INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers, twitch_stream_id)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (twitch_stream_id) DO NOTHING`,
-            [ch, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, streamId]
-          );
+          // Try to claim an existing open session for this channel (handles old NULL rows + new streams)
+          const { rowCount } = await db.query(`
+            UPDATE stream_sessions SET
+              twitch_stream_id = $1,
+              started_at       = $2,
+              title            = $3,
+              game             = $4,
+              peak_viewers     = GREATEST(peak_viewers, $5)
+            WHERE id = (
+              SELECT id FROM stream_sessions
+              WHERE channel_name = $6
+                AND ended_at IS NULL
+                AND (twitch_stream_id = $1 OR twitch_stream_id IS NULL)
+              ORDER BY started_at DESC
+              LIMIT 1
+            )
+          `, [streamId, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, ch]);
+
+          if ((rowCount ?? 0) === 0) {
+            // No existing session — insert fresh row
+            await db.query(
+              `INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers, twitch_stream_id)
+               VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (twitch_stream_id) DO NOTHING`,
+              [ch, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, streamId]
+            );
+          }
+
           this.liveStreamIds.set(streamId, ch);
-          logger.info(`Stream started: ${ch} (${streamId})`);
+          logger.info(`Stream detected: ${ch} started_at=${stream.started_at} (${streamId})`);
         } else {
           // Ongoing — update title/game/peak_viewers
           await db.query(
