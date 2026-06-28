@@ -78,6 +78,7 @@ wsHandler(wss);
 
 const twitchManager = new TwitchManager(wss);
 (global as any).twitchManager = twitchManager;
+twitchManager.startStreamPoller();
 
 const PORT = parseInt(process.env.PORT || '4000');
 
@@ -132,6 +133,20 @@ async function runMigrations() {
     await db.query(
       "UPDATE settings SET value='' WHERE key='mute_reason' AND value='Spam detected by TwitchMod'"
     );
+    // Stream sessions — track live stream start/end per channel
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS stream_sessions (
+        id SERIAL PRIMARY KEY,
+        channel_name VARCHAR(128) NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ended_at TIMESTAMPTZ,
+        title VARCHAR(256),
+        game VARCHAR(128),
+        peak_viewers INTEGER DEFAULT 0
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_streams_channel ON stream_sessions(channel_name)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_streams_started ON stream_sessions(started_at DESC)`);
     logger.info('Migrations applied');
   } catch (err) {
     logger.error('Migration failed', err);

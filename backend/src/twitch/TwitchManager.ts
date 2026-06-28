@@ -820,6 +820,70 @@ export class TwitchManager {
     }
   }
 
+  // ============================================================================
+  // STREAM SESSION POLLER — polls Helix /streams every 60s
+  // ============================================================================
+  private streamPollInterval: ReturnType<typeof setInterval> | null = null;
+  private liveChannels: Set<string> = new Set(); // currently detected as live
+
+  startStreamPoller(): void {
+    if (this.streamPollInterval) return;
+    this.streamPollInterval = setInterval(() => this.pollStreams(), 60_000);
+    // First poll after short delay so DB migrations are done
+    setTimeout(() => this.pollStreams(), 5_000);
+  }
+
+  private async pollStreams(): Promise<void> {
+    const channelNames = [...this.channels.keys()];
+    if (channelNames.length === 0) return;
+
+    try {
+      const headers = await this.getHelixHeaders(null);
+      const query = channelNames.map(c => `user_login=${encodeURIComponent(c)}`).join('&');
+      const res = await fetch(`https://api.twitch.tv/helix/streams?${query}&first=100`, { headers });
+      if (!res.ok) return;
+      const data = await res.json() as any;
+      const liveNow = new Set<string>((data.data || []).map((s: any) => s.user_login.toLowerCase()));
+
+      // Detect stream starts
+      for (const stream of (data.data || [])) {
+        const ch = stream.user_login.toLowerCase();
+        if (!this.liveChannels.has(ch)) {
+          // Stream just started — open a new session
+          await db.query(
+            `INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers)
+             VALUES ($1, NOW(), $2, $3, $4)`,
+            [ch, stream.title || null, stream.game_name || null, stream.viewer_count || 0]
+          );
+          logger.info(`Stream started: ${ch}`);
+        } else {
+          // Stream ongoing — update peak viewers
+          await db.query(
+            `UPDATE stream_sessions SET peak_viewers = GREATEST(peak_viewers, $1)
+             WHERE channel_name=$2 AND ended_at IS NULL`,
+            [stream.viewer_count || 0, ch]
+          );
+        }
+      }
+
+      // Detect stream ends
+      for (const ch of this.liveChannels) {
+        if (!liveNow.has(ch)) {
+          await db.query(
+            `UPDATE stream_sessions SET ended_at=NOW()
+             WHERE channel_name=$1 AND ended_at IS NULL`,
+            [ch]
+          );
+          logger.info(`Stream ended: ${ch}`);
+        }
+      }
+
+      this.liveChannels = liveNow;
+    } catch (err) {
+      logger.error('pollStreams error', err);
+    }
+  }
+
   isConnected(): boolean {
     return this.globalClient?.readyState() === 'OPEN' || this.connections.size > 0;
   }

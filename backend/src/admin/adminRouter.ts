@@ -147,6 +147,100 @@ adminRouter.get('/stats/timeline', async (_req: Request, res: Response) => {
   res.json(rows);
 });
 
+// Moderator leaderboard — who muted/banned/dismissed how many
+adminRouter.get('/stats/moderators', async (_req: Request, res: Response) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        ml.performed_by,
+        u.name AS display_name,
+        u.picture,
+        COUNT(*) FILTER (WHERE ml.action='MUTED')::int AS mutes,
+        COUNT(*) FILTER (WHERE ml.action='AUTO_MUTED')::int AS auto_mutes,
+        COUNT(*) FILTER (WHERE ml.action='BANNED')::int AS bans,
+        COUNT(*) FILTER (WHERE ml.action='UNBANNED')::int AS unbans,
+        COUNT(*)::int AS total,
+        MAX(ml.created_at) AS last_action
+      FROM moderation_logs ml
+      LEFT JOIN users u ON u.email = ml.performed_by
+      WHERE ml.performed_by NOT IN ('AUTO', 'console')
+      GROUP BY ml.performed_by, u.name, u.picture
+      ORDER BY total DESC
+      LIMIT 50
+    `);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'moderator stats failed' });
+  }
+});
+
+// Stream sessions list
+adminRouter.get('/streams', async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(parseInt((req.query.limit as string) || '100'), 500);
+    const channel = req.query.channel as string | undefined;
+    const params: any[] = [limit];
+    const where = channel ? `WHERE channel_name=$2` : '';
+    if (channel) params.push(channel);
+    const { rows } = await db.query(`
+      SELECT id, channel_name, started_at, ended_at, title, game, peak_viewers,
+        EXTRACT(EPOCH FROM (COALESCE(ended_at, NOW()) - started_at))::int AS duration_seconds
+      FROM stream_sessions
+      ${where}
+      ORDER BY started_at DESC
+      LIMIT $1
+    `, params);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'streams failed' });
+  }
+});
+
+// Moderation activity during a specific stream session
+adminRouter.get('/streams/:id/stats', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { rows: [session] } = await db.query(
+      'SELECT * FROM stream_sessions WHERE id=$1', [id]
+    );
+    if (!session) return res.status(404).json({ error: 'not found' });
+
+    const endAt = session.ended_at || new Date().toISOString();
+    const [actions, timeline, topSpammers] = await Promise.all([
+      db.query(`
+        SELECT action, COUNT(*)::int AS c
+        FROM moderation_logs
+        WHERE channel_name=$1 AND created_at BETWEEN $2 AND $3
+        GROUP BY action
+      `, [session.channel_name, session.started_at, endAt]),
+      db.query(`
+        SELECT
+          date_trunc('hour', created_at) AS hour,
+          COUNT(*) FILTER (WHERE spam_score >= 70)::int AS spam,
+          COUNT(*)::int AS total
+        FROM messages
+        WHERE channel_name=$1 AND created_at BETWEEN $2 AND $3
+        GROUP BY hour ORDER BY hour
+      `, [session.channel_name, session.started_at, endAt]),
+      db.query(`
+        SELECT username, COUNT(*)::int AS actions
+        FROM moderation_logs
+        WHERE channel_name=$1 AND created_at BETWEEN $2 AND $3
+        GROUP BY username ORDER BY actions DESC LIMIT 10
+      `, [session.channel_name, session.started_at, endAt]),
+    ]);
+
+    res.json({
+      session,
+      actions: actions.rows,
+      timeline: timeline.rows,
+      top_spammers: topSpammers.rows,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'stream stats failed' });
+  }
+});
+
 // Moderation efficiency: per-channel mute rate (mutes per 100 messages)
 adminRouter.get('/stats/efficiency', async (_req: Request, res: Response) => {
   try {

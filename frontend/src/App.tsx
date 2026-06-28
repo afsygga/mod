@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutDashboard, ScrollText, Settings as SettingsIcon, Globe, Crown, Star, Gem, Shield, LogOut, ShieldCheck, Twitch, Menu, X } from 'lucide-react';
+import { LayoutDashboard, ScrollText, Settings as SettingsIcon, Globe, Crown, Star, Gem, Shield, LogOut, ShieldCheck, Twitch, Menu, X, BarChart2 } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
 import { Channel, ChatMessage, QueueItem, AppSettings } from './types';
 import { ChannelManager } from './components/ChannelManager/ChannelManager';
@@ -12,6 +12,7 @@ import { LoginPage } from './components/Auth/LoginPage';
 import { SuccessAnimation } from './components/Auth/SuccessAnimation';
 import { TwitchSetup } from './components/Auth/TwitchSetup';
 import { AdminPanel } from './components/Admin/AdminPanel';
+import { Analytics } from './components/Analytics/Analytics';
 import { useAuth } from './hooks/useAuth';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -20,7 +21,7 @@ import { getUserColor } from './utils/colors';
 import { playNotification } from './utils/sound';
 import { T, Lang } from './utils/i18n';
 
-type Tab = 'dashboard' | 'logs' | 'settings' | 'admin';
+type Tab = 'dashboard' | 'logs' | 'settings' | 'admin' | 'analytics';
 
 const ROLE_OPTIONS = [
   { id: 'Broadcaster', icon: Crown, color: '#f04747' },
@@ -300,7 +301,10 @@ export default function App() {
             ['dashboard', t.dashboard, LayoutDashboard],
             ['logs', t.logs, ScrollText],
             ['settings', t.settings, SettingsIcon],
-            ...(user.role === 'admin' ? [['admin', 'Admin', ShieldCheck] as const] : []),
+            ...(user.role === 'admin' ? [
+              ['analytics', 'Аналитика', BarChart2] as const,
+              ['admin', 'Admin', ShieldCheck] as const,
+            ] : []),
           ] as const).map(([id, label, Icon]) => (
             <button key={id} onClick={() => setTab(id as Tab)}
               style={{ ...tabStyle(id), padding: isMobile ? '8px 10px' : '7px 14px', gap: isMobile ? '0' : '7px' }}
@@ -662,6 +666,12 @@ export default function App() {
           <Settings settings={settings} channels={channels}
             onSave={s => { setSettings(s); setAutoMode(s.auto_mode); autoModeRef.current = s.auto_mode; }}
             lang={lang} />
+        </div>
+      )}
+
+      {tab === 'analytics' && user.role === 'admin' && (
+        <div style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
+          <Analytics />
         </div>
       )}
 
