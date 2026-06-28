@@ -210,9 +210,17 @@ export function Analytics() {
     api.get<any>(`/api/admin/channels/${encodeURIComponent(ch)}/moderators`)
       .then(data => {
         if (Array.isArray(data)) { setMods(data); setModsError(null); }
-        else setModsError(data?.error || data?.hint || 'Ошибка загрузки');
+        else setModsError(data?.hint || data?.error || 'Ошибка загрузки');
       })
-      .catch(() => setModsError('Ошибка соединения'))
+      .catch((err: Error) => {
+        // api.get throws Error with response body text on non-2xx
+        try {
+          const body = JSON.parse(err.message);
+          setModsError(body.hint || body.error || err.message);
+        } catch {
+          setModsError(err.message || 'Ошибка соединения');
+        }
+      })
       .finally(() => setModsLoading(false));
   }, []);
 
