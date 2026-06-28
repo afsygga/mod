@@ -12,6 +12,7 @@ interface Props {
   items: QueueItem[];
   onRemove: (id: string) => void;
   onMuted: (id: string) => void;
+  onClearAll: () => void;
   onUserClick: (username: string, channel: string, color: string) => void;
   lang: Lang;
 }
@@ -24,10 +25,12 @@ interface CardProps {
   onBan: () => void;
   onRemove: () => void;
   onUserClick: () => void;
+  isSelected: boolean;
+  onToggleSelected: () => void;
   lang: Lang;
 }
 
-function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, onUserClick, lang }: CardProps) {
+function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, onUserClick, isSelected, onToggleSelected, lang }: CardProps) {
   const t = T[lang];
   const durations = muteDurations(lang);
   const isMuted = item.muted;
@@ -58,6 +61,25 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
 
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+        {!isMuted && (
+          <motion.button
+            initial={{ opacity: 0, scale: 0.7 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+            onClick={onToggleSelected}
+            title={isSelected ? 'Снять выбор' : 'Выбрать'}
+            style={{
+              width: '18px', height: '18px', borderRadius: '5px', cursor: 'pointer', flexShrink: 0,
+              background: isSelected ? '#ffc800' : 'rgba(255,255,255,0.06)',
+              border: isSelected ? '1px solid #ffc800' : '1px solid rgba(255,255,255,0.18)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 0, outline: 'none',
+              boxShadow: isSelected ? '0 0 0 3px rgba(255,200,0,0.2)' : 'none',
+              transition: 'background 0.15s, border-color 0.15s, box-shadow 0.15s',
+            }}>
+            {isSelected && <Check size={11} style={{ color: '#000' }} />}
+          </motion.button>
+        )}
         <div onClick={onUserClick} style={{ cursor: 'pointer', flexShrink: 0 }}
           onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
           onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
@@ -195,12 +217,25 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
   );
 }
 
-export function ModerationQueue({ items, onRemove, onMuted, onUserClick, lang }: Props) {
+export function ModerationQueue({ items, onRemove, onMuted, onClearAll, onUserClick, lang }: Props) {
   const [muteDurs, setMuteDurs] = useState<Record<string, number>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
   const isMobile = useIsMobile();
   const t = T[lang];
+
+  // Auto-dismiss items with no action after 60 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      items.forEach(item => {
+        if (!item.muted && now - item.ts > 60_000) {
+          onRemove(item.id);
+        }
+      });
+    }, 5_000);
+    return () => clearInterval(interval);
+  }, [items, onRemove]);
 
   const getDuration = (id: string) => muteDurs[id] || 600;
 
@@ -267,6 +302,19 @@ export function ModerationQueue({ items, onRemove, onMuted, onUserClick, lang }:
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {items.length > 0 && (
+            <button onClick={onClearAll} style={{
+              fontSize: '11px', fontWeight: 600,
+              padding: '6px 11px', borderRadius: '8px',
+              background: 'rgba(255,255,255,0.025)',
+              color: 'rgba(255,255,255,0.45)',
+              border: 'none', outline: 'none', cursor: 'pointer',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(240,71,71,0.1)'; e.currentTarget.style.color = '#ff7070'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; e.currentTarget.style.color = 'rgba(255,255,255,0.45)'; }}>
+              {lang === 'ru' ? 'Очистить' : 'Clear all'}
+            </button>
+          )}
           {items.filter(i => !i.muted).length > 1 && (
             <button onClick={selectedIds.size > 0 ? clearSelection : selectAll} style={{
               fontSize: '11px', fontWeight: 600,
@@ -328,38 +376,22 @@ export function ModerationQueue({ items, onRemove, onMuted, onUserClick, lang }:
             {items.map(item => {
               const isSelected = selectedIds.has(item.id);
               return (
-                <div key={item.id} style={{ position: 'relative' }}>
-                  {!item.muted && (
-                    <button onClick={() => toggleSelected(item.id)}
-                      title={isSelected ? 'Снять выбор' : 'Выбрать'}
-                      style={{
-                        position: 'absolute', top: '12px', left: '12px',
-                        width: '18px', height: '18px', borderRadius: '5px', cursor: 'pointer',
-                        background: isSelected ? '#ffc800' : 'rgba(0,0,0,0.45)',
-                        border: isSelected ? '1px solid #ffc800' : '1px solid rgba(255,255,255,0.2)',
-                        zIndex: 5,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        padding: 0, outline: 'none',
-                        boxShadow: isSelected ? '0 0 0 3px rgba(255,200,0,0.25)' : 'none',
-                      }}>
-                      {isSelected && <Check size={11} style={{ color: '#000' }} />}
-                    </button>
-                  )}
-                  <div style={{
-                    outline: isSelected ? '2px solid rgba(255,200,0,0.5)' : 'none',
-                    outlineOffset: '-2px',
-                    borderRadius: '14px',
-                  }}>
-                    <QueueCard
-                      item={item}
-                      duration={getDuration(item.id)}
-                      onDurationChange={n => setMuteDurs(p => ({ ...p, [item.id]: n }))}
-                      onMute={() => handleMute(item)}
-                      onBan={() => handleBan(item)}
-                      onRemove={() => onRemove(item.id)}
-                      onUserClick={() => onUserClick(item.username, item.channel, item.color)}
-                      lang={lang} />
-                  </div>
+                <div key={item.id} style={{
+                  outline: isSelected ? '2px solid rgba(255,200,0,0.5)' : 'none',
+                  outlineOffset: '-2px',
+                  borderRadius: '14px',
+                }}>
+                  <QueueCard
+                    item={item}
+                    duration={getDuration(item.id)}
+                    onDurationChange={n => setMuteDurs(p => ({ ...p, [item.id]: n }))}
+                    onMute={() => handleMute(item)}
+                    onBan={() => handleBan(item)}
+                    onRemove={() => onRemove(item.id)}
+                    onUserClick={() => onUserClick(item.username, item.channel, item.color)}
+                    isSelected={isSelected}
+                    onToggleSelected={() => toggleSelected(item.id)}
+                    lang={lang} />
                 </div>
               );
             })}

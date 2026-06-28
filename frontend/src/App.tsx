@@ -617,6 +617,7 @@ export default function App() {
                 setQueue(prev => prev.map(q => q.id === id ? { ...q, muted: true } : q));
                 setTimeout(() => setQueue(prev => prev.filter(q => q.id !== id)), 60000);
               }}
+              onClearAll={() => setQueue([])}
               onUserClick={(username, channel, color) => setSelectedUser({ username, channel, color })}
               lang={lang} />
           </div>

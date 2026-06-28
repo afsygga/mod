@@ -337,6 +337,26 @@ export class SpamEngine {
       else if (emojiRepeats >= 1) { score += 30; reasons.push('emoji repeat'); }
     }
 
+    // 4d. ROTATION PATTERN — A→B→A→B bot cycling between messages
+    if (normalizedMsg && previousMessages.length >= 2) {
+      const histNorms = previousMessages.map(m => normalizeFn(m));
+      const matchIdxs = histNorms.reduce<number[]>((acc, nm, i) => {
+        if (nm === normalizedMsg || editRatio(previousMessages[i], message) >= 0.8) acc.push(i);
+        return acc;
+      }, []);
+      if (matchIdxs.length >= 1) {
+        // Check that there's at least one DIFFERENT message between the first match and now
+        const firstMatch = matchIdxs[0];
+        const hasDifferentBetween = histNorms.slice(firstMatch + 1).some(
+          nm => nm !== normalizedMsg && nm.length > 0 && editRatio(nm, normalizedMsg) < 0.7
+        );
+        if (hasDifferentBetween) {
+          score += matchIdxs.length >= 2 ? 50 : 35;
+          reasons.push('rotation pattern');
+        }
+      }
+    }
+
     // 4c. EMOTE FLOOD — detect Twitch emote spam (words like CamelCase/CAPS tokens, no punctuation)
     // Custom 7TV/BTTV/FFZ emotes are plain text tokens that survive normalize(), so they
     // won't be caught by the emoji path above. We detect them separately.
