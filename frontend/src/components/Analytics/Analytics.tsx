@@ -203,6 +203,28 @@ export function Analytics() {
     }).finally(() => setInit(true));
   }, []);
 
+  const loadModsFromLogs = useCallback((ch: string) => {
+    api.get<any[]>(`/api/admin/stats/moderators?channel=${encodeURIComponent(ch)}`)
+      .then(data => {
+        // Convert log-based stats to TwitchMod shape
+        const converted: TwitchMod[] = (data || []).map((m: any) => ({
+          twitch_login: m.twitch_username || m.performed_by,
+          twitch_display_name: m.twitch_display_name || m.display_name || m.performed_by?.split('@')[0] || m.performed_by,
+          twitch_avatar: m.twitch_avatar || null,
+          mutes: m.mutes || 0,
+          auto_mutes: m.auto_mutes || 0,
+          bans: m.bans || 0,
+          unbans: m.unbans || 0,
+          total: m.total || 0,
+          last_action: m.last_action || null,
+        }));
+        setMods(converted);
+        setModsError('Показаны только модераторы которые действовали через сайт (нет scope channel:read:moderators)');
+      })
+      .catch(() => setModsError('Не удалось загрузить данные'))
+      .finally(() => setModsLoading(false));
+  }, []);
+
   const loadMods = useCallback((ch: string) => {
     if (!ch) return;
     setModsLoading(true);
@@ -210,19 +232,10 @@ export function Analytics() {
     api.get<any>(`/api/admin/channels/${encodeURIComponent(ch)}/moderators`)
       .then(data => {
         if (Array.isArray(data)) { setMods(data); setModsError(null); }
-        else setModsError(data?.hint || data?.error || 'Ошибка загрузки');
+        else loadModsFromLogs(ch);
       })
-      .catch((err: Error) => {
-        // api.get throws Error with response body text on non-2xx
-        try {
-          const body = JSON.parse(err.message);
-          setModsError(body.hint || body.error || err.message);
-        } catch {
-          setModsError(err.message || 'Ошибка соединения');
-        }
-      })
-      .finally(() => setModsLoading(false));
-  }, []);
+      .catch(() => loadModsFromLogs(ch));
+  }, [loadModsFromLogs]);
 
   useEffect(() => {
     if (selectedChannel) loadMods(selectedChannel);
@@ -306,14 +319,6 @@ export function Analytics() {
               {modsLoading ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '13px' }}>
                   Загрузка модераторов с Twitch...
-                </div>
-              ) : modsError ? (
-                <div style={{ padding: '24px', color: '#ff7070', fontSize: '12px', lineHeight: 1.6 }}>
-                  <div style={{ fontWeight: 700, marginBottom: '4px' }}>Не удалось получить список модераторов</div>
-                  <div style={{ color: 'rgba(255,255,255,0.4)' }}>{modsError}</div>
-                  <div style={{ marginTop: '10px', color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>
-                    Переподключи Twitch аккаунт в Настройках — нужен scope <code style={{ color: '#ffc800' }}>channel:read:moderators</code>
-                  </div>
                 </div>
               ) : mods.length === 0 ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '13px' }}>
@@ -404,6 +409,13 @@ export function Analytics() {
                 );
               })}
             </div>
+
+            {/* Fallback notice */}
+            {modsError && mods.length > 0 && (
+              <div style={{ marginTop: '10px', padding: '8px 14px', borderRadius: '8px', background: 'rgba(255,200,0,0.06)', border: '1px solid rgba(255,200,0,0.12)', fontSize: '11px', color: 'rgba(255,200,0,0.6)' }}>
+                {modsError}
+              </div>
+            )}
 
             {/* Legend */}
             {mods.length > 0 && (
