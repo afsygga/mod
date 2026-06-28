@@ -78,7 +78,6 @@ wsHandler(wss);
 
 const twitchManager = new TwitchManager(wss);
 (global as any).twitchManager = twitchManager;
-twitchManager.startStreamPoller();
 
 const PORT = parseInt(process.env.PORT || '4000');
 
@@ -183,6 +182,7 @@ async function start() {
 
     await runMigrations();
     await bootstrapAdmin();
+    twitchManager.startStreamPoller();
     TelegramBot.init();
 
     httpServer.listen(PORT, () => {
