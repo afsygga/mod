@@ -207,30 +207,22 @@ export default function App() {
   }, [user]);
 
   // === AUTH GATES ===
-  if (loading || networkError) {
+  if (loading) {
     return (
       <div style={{
-        height: '100vh', display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', gap: '12px',
+        height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
         <div style={{
-          width: '32px', height: '32px', borderRadius: '50%',
+          width: '28px', height: '28px', borderRadius: '50%',
           border: '2px solid rgba(255,255,255,0.08)',
-          borderTop: '2px solid rgba(255,255,255,0.5)',
+          borderTop: '2px solid rgba(255,255,255,0.4)',
           animation: 'spin 0.8s linear infinite',
         }} />
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.35)' }}>
-          {networkError ? 'Переподключение к серверу...' : 'Загрузка...'}
-        </span>
-        {networkError && (
-          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.2)' }}>
-            повтор каждые 5 секунд
-          </span>
-        )}
       </div>
     );
   }
+  // networkError — do NOT redirect to login, let the main app render with a banner below
 
   if (!user) {
     return (
@@ -730,6 +722,26 @@ export default function App() {
             userName={user.name?.split(' ')[0] || undefined}
             onComplete={() => setShowSuccess(false)}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Network error banner */}
+      <AnimatePresence>
+        {networkError && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99997,
+              padding: '6px 16px', textAlign: 'center',
+              background: 'rgba(240,71,71,0.12)',
+              borderBottom: '1px solid rgba(240,71,71,0.2)',
+              fontSize: '11px', color: 'rgba(255,120,120,0.9)',
+              backdropFilter: 'blur(10px)',
+            }}>
+            Нет соединения с сервером — переподключение...
+          </motion.div>
         )}
       </AnimatePresence>
 
