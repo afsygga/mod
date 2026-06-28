@@ -147,6 +147,131 @@ adminRouter.get('/stats/timeline', async (_req: Request, res: Response) => {
   res.json(rows);
 });
 
+// Twitch channel moderators — fetches real mod list from Helix, then joins with action logs
+adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Response) => {
+  try {
+    const channel = req.params.channel.toLowerCase();
+    const tm: any = (global as any).twitchManager;
+
+    // 1. Get broadcaster_id (from cache or Helix)
+    const { rows: ownerRows } = await db.query(
+      'SELECT owner_email FROM channels WHERE name=$1', [channel]
+    );
+    const ownerEmail = ownerRows[0]?.owner_email || null;
+
+    // Get broadcaster id from twitch_user_meta or fetch it
+    let broadcasterId: string | null = null;
+    const { rows: metaRows } = await db.query(
+      'SELECT twitch_id FROM twitch_user_meta WHERE username=$1', [channel]
+    );
+    if (metaRows[0]?.twitch_id) {
+      broadcasterId = metaRows[0].twitch_id;
+    } else if (tm) {
+      // Fetch via Helix
+      const headers = await tm.getHelixHeadersPublic(ownerEmail);
+      const r = await fetch(`https://api.twitch.tv/helix/users?login=${channel}`, { headers });
+      if (r.ok) {
+        const d: any = await r.json();
+        broadcasterId = d.data?.[0]?.id || null;
+        if (broadcasterId) {
+          await db.query(
+            `INSERT INTO twitch_user_meta (username, twitch_id, display_name, profile_image_url, fetched_at)
+             VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT (username) DO UPDATE SET twitch_id=$2, fetched_at=NOW()`,
+            [channel, broadcasterId, d.data[0].display_name, d.data[0].profile_image_url]
+          );
+        }
+      }
+    }
+
+    if (!broadcasterId) return res.status(404).json({ error: 'broadcaster not found' });
+
+    // 2. Fetch moderator list from Helix (paginated, up to 500)
+    const headers = await tm.getHelixHeadersPublic(ownerEmail);
+    let mods: any[] = [];
+    let cursor: string | null = null;
+    do {
+      const url = `https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=${broadcasterId}&first=100${cursor ? `&after=${cursor}` : ''}`;
+      const r = await fetch(url, { headers });
+      if (!r.ok) break;
+      const d: any = await r.json();
+      mods = mods.concat(d.data || []);
+      cursor = d.pagination?.cursor || null;
+    } while (cursor);
+
+    // 3. Fetch Twitch avatars for all mods (from cache, then Helix for missing ones)
+    const logins = mods.map((m: any) => m.user_login.toLowerCase());
+    const { rows: cachedMeta } = await db.query(
+      `SELECT username, profile_image_url, display_name FROM twitch_user_meta WHERE username = ANY($1)`,
+      [logins]
+    );
+    const metaMap: Record<string, { avatar: string | null; displayName: string }> = {};
+    for (const r of cachedMeta) metaMap[r.username] = { avatar: r.profile_image_url, displayName: r.display_name || r.username };
+
+    const missing = logins.filter(l => !metaMap[l]);
+    if (missing.length > 0 && tm) {
+      // Fetch in batches of 100
+      for (let i = 0; i < missing.length; i += 100) {
+        const batch = missing.slice(i, i + 100);
+        const q = batch.map(l => `login=${l}`).join('&');
+        const hr = await fetch(`https://api.twitch.tv/helix/users?${q}`, { headers });
+        if (hr.ok) {
+          const hd: any = await hr.json();
+          for (const u of (hd.data || [])) {
+            metaMap[u.login] = { avatar: u.profile_image_url, displayName: u.display_name };
+            await db.query(
+              `INSERT INTO twitch_user_meta (username, twitch_id, display_name, profile_image_url, fetched_at)
+               VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT (username) DO UPDATE SET twitch_id=$2, display_name=$3, profile_image_url=$4, fetched_at=NOW()`,
+              [u.login, u.id, u.display_name, u.profile_image_url]
+            ).catch(() => {});
+          }
+        }
+      }
+    }
+
+    // 4. Get action counts per twitch_username for this channel
+    const { rows: actionRows } = await db.query(`
+      SELECT
+        LOWER(u.twitch_username) AS twitch_login,
+        COUNT(*) FILTER (WHERE ml.action='MUTED')::int AS mutes,
+        COUNT(*) FILTER (WHERE ml.action='AUTO_MUTED')::int AS auto_mutes,
+        COUNT(*) FILTER (WHERE ml.action='BANNED')::int AS bans,
+        COUNT(*) FILTER (WHERE ml.action='UNBANNED')::int AS unbans,
+        COUNT(*)::int AS total,
+        MAX(ml.created_at) AS last_action
+      FROM moderation_logs ml
+      JOIN users u ON u.email = ml.performed_by
+      WHERE ml.channel_name = $1 AND u.twitch_username IS NOT NULL
+      GROUP BY LOWER(u.twitch_username)
+    `, [channel]);
+
+    const actionMap: Record<string, any> = {};
+    for (const r of actionRows) actionMap[r.twitch_login] = r;
+
+    // 5. Combine: all Twitch mods + their stats (0 if not in logs)
+    const result = mods.map((m: any) => {
+      const login = m.user_login.toLowerCase();
+      const stats = actionMap[login] || { mutes: 0, auto_mutes: 0, bans: 0, unbans: 0, total: 0, last_action: null };
+      const meta = metaMap[login] || { avatar: null, displayName: m.user_name };
+      return {
+        twitch_login: login,
+        twitch_display_name: meta.displayName || m.user_name,
+        twitch_avatar: meta.avatar,
+        mutes: stats.mutes,
+        auto_mutes: stats.auto_mutes,
+        bans: stats.bans,
+        unbans: stats.unbans,
+        total: stats.total,
+        last_action: stats.last_action,
+      };
+    }).sort((a: any, b: any) => b.total - a.total);
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'channel moderators failed' });
+  }
+});
+
 // Moderator leaderboard — who muted/banned/dismissed how many
 // ?channel=channelname to filter by channel
 adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {

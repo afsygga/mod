@@ -474,6 +474,10 @@ export class TwitchManager {
     };
   }
 
+  async getHelixHeadersPublic(ownerEmail: string | null) {
+    return this.getHelixHeaders(ownerEmail);
+  }
+
   private async getHelixHeaders(ownerEmail: string | null) {
     const { clientId, oauth } = await this.getHelixCredentials(ownerEmail);
     return {
