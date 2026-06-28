@@ -192,15 +192,14 @@ export function Analytics() {
 
   useEffect(() => {
     Promise.all([
-      api.get<{ name: string }[]>('/api/channels'),
-      api.get<StreamSession[]>('/api/admin/streams'),
+      api.get<{ name: string }[]>('/api/channels').catch(() => [] as { name: string }[]),
+      api.get<StreamSession[]>('/api/admin/streams').catch(() => [] as StreamSession[]),
     ]).then(([chs, strms]) => {
       const names = chs.map(c => c.name);
       setChannels(names);
       setStreams(strms);
       if (names.length > 0) setSelectedChannel(names[0]);
-      setInit(true);
-    });
+    }).finally(() => setInit(true));
   }, []);
 
   const loadMods = useCallback((ch: string) => {
