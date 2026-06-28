@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users, Mail, Tv2, Activity, BarChart3, Trash2, Shield, ShieldOff,
-  UserPlus, Search, Crown, X, Plus, TrendingUp,
+  UserPlus, Search, Crown, X, Plus, TrendingUp, MessageSquare, Zap,
+  VolumeX, Ban, RotateCcw, AlertTriangle,
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
@@ -74,134 +75,271 @@ export function AdminPanel() {
 // ============================================================================
 // Overview / Stats
 // ============================================================================
+
+const ACTION_META: Record<string, { color: string; bg: string; icon: any; label: string }> = {
+  MUTED:      { color: '#ffc800', bg: 'rgba(255,200,0,0.1)',    icon: VolumeX,    label: 'Мут' },
+  AUTO_MUTED: { color: '#ff9800', bg: 'rgba(255,152,0,0.1)',    icon: Zap,        label: 'Авто-мут' },
+  BANNED:     { color: '#ff5959', bg: 'rgba(240,71,71,0.1)',    icon: Ban,        label: 'Бан' },
+  UNBANNED:   { color: '#00c878', bg: 'rgba(0,200,120,0.1)',    icon: RotateCcw,  label: 'Разбан' },
+};
+
 function Overview() {
   const [stats, setStats] = useState<any>(null);
   const [timeline, setTimeline] = useState<any[]>([]);
+  const [period, setPeriod] = useState<7 | 14 | 30>(14);
+  const [hoveredBar, setHoveredBar] = useState<number | null>(null);
 
-  useEffect(() => {
+  const load = () => {
     api.get('/api/admin/stats').then(setStats).catch(console.error);
     api.get<any[]>('/api/admin/stats/timeline').then(setTimeline).catch(console.error);
-  }, []);
+  };
 
-  if (!stats) return <div style={{ color: 'rgba(255,255,255,0.4)' }}>Загрузка статистики...</div>;
+  useEffect(() => { load(); }, []);
 
-  const maxTimeline = Math.max(1, ...timeline.map(t => t.total));
+  if (!stats) return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '40px', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>
+      Загрузка статистики...
+    </div>
+  );
+
+  const filteredTimeline = timeline.slice(-period);
+  const maxBar = Math.max(1, ...filteredTimeline.map(t => t.total));
+
+  const totalMutes = stats.actions.filter((a: any) => ['MUTED','AUTO_MUTED'].includes(a.action)).reduce((s: number, a: any) => s + a.c, 0);
+  const totalBans = stats.actions.find((a: any) => a.action === 'BANNED')?.c || 0;
+  const spamRate = stats.total_messages > 0
+    ? ((stats.actions.reduce((s: number, a: any) => s + a.c, 0) / stats.total_messages) * 100).toFixed(2)
+    : '0';
 
   return (
-    <div>
-      <h2 style={{ fontSize: '22px', fontWeight: 700, marginBottom: '4px', color: 'rgba(255,255,255,0.95)' }}>Обзор</h2>
-      <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '24px' }}>Аналитика всей системы</p>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
-        <StatCard num={stats.users.c} label="Пользователи" sub={`${stats.users.active} активны, ${stats.users.admins} админ`} color="#ffc800" />
-        <StatCard num={stats.whitelist_count} label="В whitelist" color="#00c878" />
-        <StatCard num={stats.channels.c} label="Каналы" sub={`${stats.channels.connected} подключено`} color="#a070ff" />
-        <StatCard num={stats.mutes_24h} label="Мутов за 24ч" color="#ff7070" />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '24px' }}>
-        <StatCard num={stats.total_messages.toLocaleString()} label="Сообщений всего" />
-        <StatCard num={stats.messages_24h.toLocaleString()} label="Сообщений за 24ч" />
-        <StatCard num={stats.total_logs.toLocaleString()} label="Действий модерации" />
-      </div>
-
-      {/* Timeline */}
-      <div className="glass-card" style={{ padding: '20px', marginBottom: '20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-          <TrendingUp size={14} style={{ color: '#ffc800' }} />
-          <h3 style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Активность за 14 дней</h3>
+    <div style={{ maxWidth: '900px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '24px' }}>
+        <div>
+          <h2 style={{ fontSize: '20px', fontWeight: 700, color: 'rgba(255,255,255,0.95)', marginBottom: '2px' }}>Обзор системы</h2>
+          <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>Аналитика всех каналов в реальном времени</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', height: '120px' }}>
-          {timeline.map((t, i) => {
-            const h = (t.total / maxTimeline) * 100;
-            const sh = (t.spam / maxTimeline) * 100;
+        <button onClick={load} style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          padding: '7px 12px', borderRadius: '9px', fontSize: '11px', fontWeight: 600,
+          background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)',
+          border: '1px solid rgba(255,255,255,0.07)', cursor: 'pointer',
+        }}>
+          <RotateCcw size={11} /> Обновить
+        </button>
+      </div>
+
+      {/* ── KPI row ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '10px' }}>
+        <KpiCard icon={Users} label="Пользователи" value={stats.users.c}
+          sub={`${stats.users.active} активны · ${stats.users.admins} админ`} color="#ffc800" />
+        <KpiCard icon={Tv2} label="Каналы" value={stats.channels.c}
+          sub={`${stats.channels.connected} подключено`} color="#a070ff" />
+        <KpiCard icon={VolumeX} label="Мутов за 24ч" value={stats.mutes_24h} color="#ff7070"
+          sub={`всего мутов: ${totalMutes.toLocaleString()}`} />
+        <KpiCard icon={AlertTriangle} label="Spam rate" value={`${spamRate}%`} color="#ff9800"
+          sub={`${stats.total_messages.toLocaleString()} сообщений`} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '20px' }}>
+        <KpiCard icon={MessageSquare} label="Сообщений за 24ч" value={stats.messages_24h.toLocaleString()} />
+        <KpiCard icon={Ban} label="Банов всего" value={totalBans.toLocaleString()} color="#ff5959" />
+        <KpiCard icon={Mail} label="В whitelist" value={stats.whitelist_count} color="#00c878" />
+      </div>
+
+      {/* ── Timeline chart ── */}
+      <div className="glass-card" style={{ padding: '20px 22px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <TrendingUp size={14} style={{ color: '#ffc800' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Активность чата</span>
+          </div>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            {([7, 14, 30] as const).map(p => (
+              <button key={p} onClick={() => setPeriod(p)} style={{
+                padding: '4px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', border: 'none',
+                background: period === p ? 'rgba(255,200,0,0.15)' : 'rgba(255,255,255,0.04)',
+                color: period === p ? '#ffc800' : 'rgba(255,255,255,0.4)',
+              }}>{p}д</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '130px', paddingBottom: '24px', position: 'relative' }}>
+          {/* Y-axis guide lines */}
+          {[0.25, 0.5, 0.75, 1].map(f => (
+            <div key={f} style={{
+              position: 'absolute', left: 0, right: 0, bottom: `calc(24px + ${f * 106}px)`,
+              borderTop: '1px solid rgba(255,255,255,0.04)',
+              fontSize: '8px', color: 'rgba(255,255,255,0.18)',
+              paddingLeft: '2px', lineHeight: '1',
+            }}>
+              {Math.round(maxBar * f).toLocaleString()}
+            </div>
+          ))}
+
+          {filteredTimeline.map((t, i) => {
+            const totalH = Math.max(2, (t.total / maxBar) * 106);
+            const spamH = t.total > 0 ? (t.spam / t.total) * totalH : 0;
+            const isHovered = hoveredBar === i;
+            const d = new Date(t.day);
             return (
-              <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', position: 'relative', height: '100%' }}>
-                <div style={{
-                  width: '100%', height: `${h}%`, borderRadius: '4px 4px 0 0',
-                  background: 'rgba(255,255,255,0.08)', position: 'relative', overflow: 'hidden',
+              <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', position: 'relative' }}
+                onMouseEnter={() => setHoveredBar(i)} onMouseLeave={() => setHoveredBar(null)}>
+                {/* Tooltip */}
+                {isHovered && (
+                  <div style={{
+                    position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+                    background: 'rgba(8,8,12,0.95)', border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '8px', padding: '6px 10px', fontSize: '10px', whiteSpace: 'nowrap', zIndex: 10,
+                    marginBottom: '4px', pointerEvents: 'none',
+                  }}>
+                    <div style={{ fontWeight: 700, color: '#fff', marginBottom: '2px' }}>
+                      {d.getDate()}.{d.getMonth() + 1}.{d.getFullYear()}
+                    </div>
+                    <div style={{ color: 'rgba(255,255,255,0.6)' }}>Сообщений: <b style={{ color: '#fff' }}>{t.total.toLocaleString()}</b></div>
+                    <div style={{ color: 'rgba(255,89,89,0.9)' }}>Спам: <b>{t.spam.toLocaleString()}</b> ({t.total > 0 ? Math.round(t.spam / t.total * 100) : 0}%)</div>
+                  </div>
+                )}
+                {/* Bar */}
+                <div style={{ width: '100%', height: `${totalH}px`, borderRadius: '4px 4px 0 0', overflow: 'hidden', position: 'relative',
+                  background: isHovered ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.1)',
+                  transition: 'background 0.15s',
                 }}>
                   <div style={{
-                    position: 'absolute', bottom: 0, left: 0, right: 0,
-                    height: `${maxTimeline > 0 ? (t.spam / t.total) * 100 : 0}%`,
-                    background: 'linear-gradient(to top, #ff5959, #ffc800)',
+                    position: 'absolute', bottom: 0, left: 0, right: 0, height: `${spamH}px`,
+                    background: 'linear-gradient(to top, rgba(255,89,89,0.85), rgba(255,152,0,0.6))',
                   }} />
                 </div>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginTop: '4px', textAlign: 'center' }}>
-                  {new Date(t.day).getDate()}.{new Date(t.day).getMonth() + 1}
+                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.28)', marginTop: '5px', textAlign: 'center' }}>
+                  {d.getDate()}.{d.getMonth() + 1}
                 </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ display: 'flex', gap: '16px', fontSize: '10px', marginTop: '4px' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'rgba(255,255,255,0.35)' }}>
+            <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'rgba(255,255,255,0.15)', display: 'inline-block' }} />
+            Все сообщения
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'rgba(255,89,89,0.8)' }}>
+            <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'rgba(255,89,89,0.7)', display: 'inline-block' }} />
+            Спам
+          </span>
+        </div>
+      </div>
+
+      {/* ── Actions breakdown ── */}
+      <div className="glass-card" style={{ padding: '18px 22px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+          <Shield size={14} style={{ color: '#a070ff' }} />
+          <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Действия модерации</span>
+          <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+            всего {stats.total_logs.toLocaleString()}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+          {stats.actions.map((a: any) => {
+            const meta = ACTION_META[a.action] || { color: '#fff', bg: 'rgba(255,255,255,0.05)', icon: Activity, label: a.action };
+            const Icon = meta.icon;
+            const pct = stats.total_logs > 0 ? Math.round(a.c / stats.total_logs * 100) : 0;
+            return (
+              <div key={a.action} style={{
+                padding: '14px 16px', borderRadius: '12px',
+                background: meta.bg, border: `1px solid ${meta.color}22`,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '8px' }}>
+                  <Icon size={13} style={{ color: meta.color }} />
+                  <span style={{ fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{meta.label}</span>
+                </div>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: meta.color, lineHeight: 1, marginBottom: '4px' }}>{a.c.toLocaleString()}</div>
+                <div style={{ height: '3px', borderRadius: '3px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                  <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: 'easeOut' }}
+                    style={{ height: '100%', background: meta.color, borderRadius: '3px' }} />
+                </div>
+                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>{pct}% от всех</div>
               </div>
             );
           })}
         </div>
       </div>
 
-      {/* Top spam users */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+      {/* ── Bottom row: top users + top channels ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         <div className="glass-card" style={{ padding: '18px' }}>
-          <h3 style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: '12px' }}>Топ нарушителей</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+            <AlertTriangle size={13} style={{ color: '#ff7070' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Топ нарушителей</span>
+          </div>
           {stats.top_users.length === 0 ? (
             <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>Нет данных</div>
-          ) : stats.top_users.map((u: any) => (
+          ) : stats.top_users.map((u: any, i: number) => (
             <div key={u.username + u.channel_name} style={{
               display: 'flex', alignItems: 'center', gap: '10px',
-              padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
-              fontSize: '12px',
+              padding: '7px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
             }}>
-              <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.username}</span>
-              <span style={{ color: '#ffc800', fontSize: '11px' }}>📺 {u.channel_name}</span>
-              <span style={{ padding: '2px 7px', borderRadius: '6px', background: 'rgba(240,71,71,0.12)', color: '#ff7070', fontSize: '10px', fontWeight: 700 }}>
-                {u.mute_count}× muted
-              </span>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.2)', minWidth: '16px' }}>#{i + 1}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.username}</div>
+                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginTop: '1px' }}>📺 {u.channel_name} · {u.flagged_count} флагов</div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#ff7070' }}>{u.mute_count}× мут</div>
+                {u.message_count > 0 && <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.25)', marginTop: '1px' }}>{u.message_count} сообщ.</div>}
+              </div>
             </div>
           ))}
         </div>
 
         <div className="glass-card" style={{ padding: '18px' }}>
-          <h3 style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: '12px' }}>Топ каналов по спаму</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+            <Tv2 size={13} style={{ color: '#ffc800' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Топ каналов по спаму</span>
+            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginLeft: 'auto' }}>7 дней</span>
+          </div>
           {stats.top_channels.length === 0 ? (
             <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>Нет данных</div>
-          ) : stats.top_channels.map((c: any) => (
-            <div key={c.channel_name} style={{
-              display: 'flex', alignItems: 'center', gap: '10px',
-              padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
-              fontSize: '12px',
-            }}>
-              <span style={{ fontWeight: 600, color: '#ffc800', flex: 1 }}>📺 {c.channel_name}</span>
-              <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px' }}>{c.msg_count} msgs</span>
-              <span style={{ padding: '2px 7px', borderRadius: '6px', background: 'rgba(255,200,0,0.12)', color: '#ffc800', fontSize: '10px', fontWeight: 700 }}>
-                {c.spam_count} спам
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Actions breakdown */}
-      <div className="glass-card" style={{ padding: '18px' }}>
-        <h3 style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: '12px' }}>Действия модерации</h3>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          {stats.actions.map((a: any) => (
-            <div key={a.action} style={{
-              padding: '8px 14px', borderRadius: '10px',
-              background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)',
-            }}>
-              <div style={{ fontSize: '16px', fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>{a.c}</div>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginTop: '2px' }}>{a.action}</div>
-            </div>
-          ))}
+          ) : stats.top_channels.map((c: any, i: number) => {
+            const spamPct = c.msg_count > 0 ? Math.round(c.spam_count / c.msg_count * 100) : 0;
+            return (
+              <div key={c.channel_name} style={{
+                padding: '7px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '5px' }}>
+                  <span style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.2)', minWidth: '16px' }}>#{i + 1}</span>
+                  <span style={{ fontWeight: 600, color: '#ffc800', fontSize: '12px', flex: 1 }}>📺 {c.channel_name}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: spamPct > 5 ? '#ff7070' : spamPct > 1 ? '#ffc800' : '#00c878' }}>{spamPct}%</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: '24px' }}>
+                  <div style={{ flex: 1, height: '3px', borderRadius: '3px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${spamPct}%`, background: spamPct > 5 ? '#ff5959' : '#ffc800', borderRadius: '3px', maxWidth: '100%' }} />
+                  </div>
+                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>{c.spam_count} / {c.msg_count}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
   );
 }
 
-function StatCard({ num, label, sub, color }: { num: any; label: string; sub?: string; color?: string }) {
+function KpiCard({ icon: Icon, label, value, sub, color }: { icon: any; label: string; value: any; sub?: string; color?: string }) {
   return (
-    <div className="glass-card" style={{ padding: '16px 20px' }}>
-      <div style={{ fontSize: '26px', fontWeight: 700, color: color || 'rgba(255,255,255,0.92)', lineHeight: 1 }}>{num}</div>
-      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginTop: '6px' }}>{label}</div>
-      {sub && <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '3px' }}>{sub}</div>}
+    <div className="glass-card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+      <div style={{
+        width: '32px', height: '32px', borderRadius: '9px', flexShrink: 0,
+        background: color ? `${color}14` : 'rgba(255,255,255,0.05)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Icon size={15} style={{ color: color || 'rgba(255,255,255,0.5)' }} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+        <div style={{ fontSize: '22px', fontWeight: 800, color: color || 'rgba(255,255,255,0.92)', lineHeight: 1 }}>{value}</div>
+        {sub && <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '4px' }}>{sub}</div>}
+      </div>
     </div>
   );
 }
