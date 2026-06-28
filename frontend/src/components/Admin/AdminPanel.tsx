@@ -3,11 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users, Mail, Tv2, Activity, BarChart3, Trash2, Shield, ShieldOff,
   UserPlus, Search, Crown, X, Plus, TrendingUp, MessageSquare, Zap,
-  VolumeX, Ban, RotateCcw, AlertTriangle,
+  VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown,
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
-type Tab = 'overview' | 'users' | 'whitelist' | 'channels' | 'logs';
+type Tab = 'overview' | 'users' | 'whitelist' | 'channels' | 'logs' | 'bans';
 
 interface AdminUser {
   id: number; email: string; name: string | null; picture: string | null;
@@ -39,6 +39,7 @@ export function AdminPanel() {
           ['users', Users, 'Пользователи'],
           ['whitelist', Mail, 'Whitelist'],
           ['channels', Tv2, 'Все каналы'],
+          ['bans', Ban, 'Баны'],
           ['logs', Activity, 'Все логи'],
         ] as const).map(([id, Icon, label]) => {
           const active = tab === id;
@@ -66,6 +67,7 @@ export function AdminPanel() {
         {tab === 'users' && <UsersTab />}
         {tab === 'whitelist' && <WhitelistTab />}
         {tab === 'channels' && <ChannelsTab />}
+        {tab === 'bans' && <BansTab />}
         {tab === 'logs' && <LogsTab />}
       </div>
     </div>
@@ -673,6 +675,143 @@ function LogsTab() {
               {l.message || '—'}
             </span>
             <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>{l.performed_by}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// BANS
+// ============================================================================
+interface BanRecord {
+  id: number;
+  username: string;
+  channel_name: string;
+  performed_by: string;
+  created_at: string;
+  performer_name: string | null;
+  performer_picture: string | null;
+  performer_twitch: string | null;
+  performer_avatar: string | null;
+  performer_display_name: string | null;
+}
+
+function BansTab() {
+  const [bans, setBans] = useState<BanRecord[]>([]);
+  const [channels, setChannels] = useState<string[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState('');
+  const [q, setQ] = useState('');
+
+  useEffect(() => {
+    api.get<{ name: string }[]>('/api/channels').then(chs => {
+      setChannels(chs.map(c => c.name));
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const url = selectedChannel
+      ? `/api/admin/bans?channel=${encodeURIComponent(selectedChannel)}`
+      : '/api/admin/bans';
+    api.get<BanRecord[]>(url).then(setBans).catch(() => {});
+  }, [selectedChannel]);
+
+  const filtered = bans.filter(b =>
+    !q || b.username.toLowerCase().includes(q.toLowerCase())
+  );
+
+  function performerName(b: BanRecord) {
+    if (b.performer_display_name) return b.performer_display_name;
+    if (b.performer_twitch) return b.performer_twitch;
+    if (b.performer_name) return b.performer_name;
+    if (b.performed_by === 'AUTO') return 'Авто-модератор';
+    if (b.performed_by.includes('@')) return b.performed_by.split('@')[0];
+    return b.performed_by;
+  }
+
+  return (
+    <div>
+      <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '4px' }}>Баны</h2>
+      <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>
+        История банов со всех каналов
+      </p>
+
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        {/* Channel filter */}
+        <div style={{ position: 'relative' }}>
+          <select value={selectedChannel} onChange={e => setSelectedChannel(e.target.value)}
+            style={{
+              appearance: 'none', padding: '8px 32px 8px 12px', borderRadius: '10px',
+              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)',
+              color: '#fff', fontSize: '12px', fontWeight: 600, cursor: 'pointer', outline: 'none',
+            }}>
+            <option value=''>Все каналы</option>
+            {channels.map(ch => <option key={ch} value={ch}>{ch}</option>)}
+          </select>
+          <ChevronDown size={11} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.35)', pointerEvents: 'none' }} />
+        </div>
+
+        {/* Search */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.025)', flex: 1, maxWidth: '300px' }}>
+          <Search size={12} style={{ color: 'rgba(255,255,255,0.35)', flexShrink: 0 }} />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск по нику..."
+            style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'rgba(255,255,255,0.9)', fontSize: '12px' }} />
+        </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.3)' }}>
+          {filtered.length} записей
+        </div>
+      </div>
+
+      <div className="glass-card" style={{ overflow: 'hidden' }}>
+        {/* Table header */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 160px 140px', gap: '0', padding: '10px 18px', fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: '0.1em', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+          <span>Забаненный</span>
+          <span>Канал</span>
+          <span>Кем забанен</span>
+          <span>Когда (МСК)</span>
+        </div>
+
+        {filtered.length === 0 ? (
+          <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '13px' }}>
+            Нет банов
+          </div>
+        ) : filtered.map(b => (
+          <div key={b.id} style={{
+            display: 'grid', gridTemplateColumns: '1fr 120px 160px 140px', gap: '0',
+            padding: '10px 18px', borderBottom: '1px solid rgba(255,255,255,0.04)',
+            alignItems: 'center',
+          }}>
+            {/* Banned user */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ff4444', flexShrink: 0 }} />
+              <span style={{ fontWeight: 600, fontSize: '13px', color: 'rgba(255,255,255,0.9)' }}>{b.username}</span>
+            </div>
+
+            {/* Channel */}
+            <span style={{ fontSize: '11px', color: '#ffc800', fontWeight: 600 }}>📺 {b.channel_name}</span>
+
+            {/* Performer */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+              {b.performer_avatar ? (
+                <img src={b.performer_avatar} alt="" style={{ width: '20px', height: '20px', borderRadius: '50%', flexShrink: 0 }} />
+              ) : b.performer_picture ? (
+                <img src={b.performer_picture} alt="" style={{ width: '20px', height: '20px', borderRadius: '50%', flexShrink: 0 }} />
+              ) : (
+                <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'rgba(255,255,255,0.07)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>
+                  {performerName(b)[0]?.toUpperCase()}
+                </div>
+              )}
+              <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.75)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {performerName(b)}
+              </span>
+            </div>
+
+            {/* Time */}
+            <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>
+              {new Date(b.created_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            </span>
           </div>
         ))}
       </div>

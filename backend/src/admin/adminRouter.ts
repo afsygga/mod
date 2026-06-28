@@ -83,6 +83,38 @@ adminRouter.delete('/channels/:name', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// BANS — banned users list
+// ============================================================================
+adminRouter.get('/bans', async (req: Request, res: Response) => {
+  try {
+    const channel = req.query.channel as string | undefined;
+    const limit = Math.min(parseInt((req.query.limit as string) || '200'), 1000);
+    const params: any[] = [limit];
+    const channelFilter = channel ? `AND ml.channel_name = $${params.push(channel)}` : '';
+
+    const { rows } = await db.query(`
+      SELECT
+        ml.id, ml.username, ml.channel_name, ml.performed_by,
+        ml.created_at,
+        u.name AS performer_name,
+        u.picture AS performer_picture,
+        u.twitch_username AS performer_twitch,
+        tm.profile_image_url AS performer_avatar,
+        tm.display_name AS performer_display_name
+      FROM moderation_logs ml
+      LEFT JOIN users u ON u.email = ml.performed_by
+      LEFT JOIN twitch_user_meta tm ON tm.username = LOWER(u.twitch_username)
+      WHERE ml.action = 'BANNED' ${channelFilter}
+      ORDER BY ml.created_at DESC
+      LIMIT $1
+    `, params);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'bans failed' });
+  }
+});
+
+// ============================================================================
 // LOGS — all logs across all channels
 // ============================================================================
 adminRouter.get('/logs', async (req: Request, res: Response) => {
@@ -189,14 +221,23 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
     const headers = await tm.getHelixHeadersPublic(ownerEmail);
     let mods: any[] = [];
     let cursor: string | null = null;
+    let helixError: string | null = null;
     do {
       const url = `https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=${broadcasterId}&first=100${cursor ? `&after=${cursor}` : ''}`;
       const r = await fetch(url, { headers });
-      if (!r.ok) break;
+      if (!r.ok) {
+        const errBody: any = await r.json().catch(() => ({}));
+        helixError = `Twitch API ${r.status}: ${errBody?.message || r.statusText}`;
+        break;
+      }
       const d: any = await r.json();
       mods = mods.concat(d.data || []);
       cursor = d.pagination?.cursor || null;
     } while (cursor);
+
+    if (helixError && mods.length === 0) {
+      return res.status(403).json({ error: helixError, hint: 'Токен не имеет scope channel:read:moderators. Переподключи Twitch аккаунт.' });
+    }
 
     // 3. Fetch Twitch avatars for all mods (from cache, then Helix for missing ones)
     const logins = mods.map((m: any) => m.user_login.toLowerCase());

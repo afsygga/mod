@@ -188,6 +188,7 @@ export function Analytics() {
   const [selectedStream, setSelectedStream] = useState<number | null>(null);
   const [section, setSection] = useState<'mods' | 'streams'>('mods');
   const [modsLoading, setModsLoading] = useState(false);
+  const [modsError, setModsError] = useState<string | null>(null);
   const [init, setInit] = useState(false);
 
   useEffect(() => {
@@ -205,9 +206,13 @@ export function Analytics() {
   const loadMods = useCallback((ch: string) => {
     if (!ch) return;
     setModsLoading(true);
-    api.get<TwitchMod[]>(`/api/admin/channels/${encodeURIComponent(ch)}/moderators`)
-      .then(setMods)
-      .catch(() => setMods([]))
+    setModsError(null);
+    api.get<any>(`/api/admin/channels/${encodeURIComponent(ch)}/moderators`)
+      .then(data => {
+        if (Array.isArray(data)) { setMods(data); setModsError(null); }
+        else setModsError(data?.error || data?.hint || 'Ошибка загрузки');
+      })
+      .catch(() => setModsError('Ошибка соединения'))
       .finally(() => setModsLoading(false));
   }, []);
 
@@ -293,6 +298,14 @@ export function Analytics() {
               {modsLoading ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '13px' }}>
                   Загрузка модераторов с Twitch...
+                </div>
+              ) : modsError ? (
+                <div style={{ padding: '24px', color: '#ff7070', fontSize: '12px', lineHeight: 1.6 }}>
+                  <div style={{ fontWeight: 700, marginBottom: '4px' }}>Не удалось получить список модераторов</div>
+                  <div style={{ color: 'rgba(255,255,255,0.4)' }}>{modsError}</div>
+                  <div style={{ marginTop: '10px', color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>
+                    Переподключи Twitch аккаунт в Настройках — нужен scope <code style={{ color: '#ffc800' }}>channel:read:moderators</code>
+                  </div>
                 </div>
               ) : mods.length === 0 ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '13px' }}>
