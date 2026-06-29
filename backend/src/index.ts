@@ -20,6 +20,7 @@ import { settingsRouter } from './channels/settingsRouter';
 import { logsRouter } from './moderation/logsRouter';
 import { authRouter } from './auth/authRouter';
 import { twitchCredsRouter } from './auth/twitchCredsRouter';
+import { twitchOAuthRouter } from './auth/twitchOAuthRouter';
 import { telegramRouter } from './telegram/telegramRouter';
 import { adminRouter } from './admin/adminRouter';
 import { authenticate } from './auth/authMiddleware';
@@ -70,6 +71,7 @@ setInterval(() => {
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
 app.use('/api/auth', rateLimit(10), authRouter);
 app.use('/api/twitch-creds', twitchCredsRouter);
+app.use('/api/twitch-oauth', twitchOAuthRouter);
 app.use('/api/telegram', authenticate, telegramRouter);
 
 // Admin (requires admin)

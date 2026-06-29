@@ -58,6 +58,18 @@ export default function App() {
     () => localStorage.getItem('twitch_connected') === 'true'
   );
   const [showSuccess, setShowSuccess] = useState(false);
+  const [oauthMsg, setOauthMsg] = useState<string | null>(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('twitch_connected')) {
+      window.history.replaceState({}, '', window.location.pathname);
+      return `Twitch подключён как @${p.get('twitch_login') || ''}`;
+    }
+    if (p.get('twitch_error')) {
+      window.history.replaceState({}, '', window.location.pathname);
+      return `Ошибка: ${p.get('twitch_error')}`;
+    }
+    return null;
+  });
   const prevUserRef = useRef<typeof user>(null);
   const msgIdRef = useRef(0);
   const autoModeRef = useRef(true);
@@ -731,6 +743,24 @@ export default function App() {
             userName={user.name?.split(' ')[0] || undefined}
             onComplete={() => setShowSuccess(false)}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Twitch OAuth result toast */}
+      <AnimatePresence>
+        {oauthMsg && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
+            style={{
+              position: 'fixed', bottom: '28px', left: '50%', transform: 'translateX(-50%)',
+              zIndex: 99998, padding: '11px 20px', borderRadius: '12px', whiteSpace: 'nowrap',
+              background: oauthMsg.startsWith('Ошибка') ? 'rgba(240,71,71,0.15)' : 'rgba(0,200,120,0.15)',
+              border: `1px solid ${oauthMsg.startsWith('Ошибка') ? 'rgba(240,71,71,0.3)' : 'rgba(0,200,120,0.3)'}`,
+              color: oauthMsg.startsWith('Ошибка') ? '#ff7070' : '#00c878',
+              fontSize: '13px', fontWeight: 600, backdropFilter: 'blur(20px)',
+            }}>
+            {oauthMsg}
+            <button onClick={() => setOauthMsg(null)} style={{ marginLeft: '12px', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', opacity: 0.6, fontSize: '14px' }}>×</button>
+          </motion.div>
         )}
       </AnimatePresence>
 

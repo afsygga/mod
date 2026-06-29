@@ -132,6 +132,27 @@ export function TwitchSetup({ onDone, closeable, onClose }: Props) {
 
         {step === 'form' && (
           <div style={{ marginTop: '20px' }}>
+            {/* OAuth button */}
+            <a href="/api/twitch-oauth/connect" style={{ textDecoration: 'none', display: 'block', marginBottom: '14px' }}>
+              <button style={{
+                width: '100%', padding: '12px 18px', borderRadius: '11px', cursor: 'pointer',
+                background: 'rgba(145,70,255,0.15)', border: '1px solid rgba(145,70,255,0.35)',
+                color: '#c49dff', fontSize: '13px', fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '9px',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(145,70,255,0.25)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'rgba(145,70,255,0.15)')}>
+                <Twitch size={15} />
+                Войти через Twitch
+              </button>
+            </a>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.07)' }} />
+              <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>или вручную</span>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.07)' }} />
+            </div>
+
             <div style={{
               padding: '12px 14px', borderRadius: '10px',
               background: 'rgba(255,200,0,0.06)', border: '1px solid rgba(255,200,0,0.15)',
