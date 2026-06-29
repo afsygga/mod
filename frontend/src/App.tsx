@@ -54,7 +54,9 @@ export default function App() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [twitchSetupOpen, setTwitchSetupOpen] = useState(false);
   const [twitchSetupChecked, setTwitchSetupChecked] = useState(false);
-  const [twitchConnected, setTwitchConnected] = useState(false);
+  const [twitchConnected, setTwitchConnected] = useState(
+    () => localStorage.getItem('twitch_connected') === 'true'
+  );
   const [showSuccess, setShowSuccess] = useState(false);
   const prevUserRef = useRef<typeof user>(null);
   const msgIdRef = useRef(0);
@@ -179,21 +181,36 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setTwitchSetupChecked(false);
-      setTwitchConnected(false);
+      // Don't reset twitchConnected — keep cached value
       return;
     }
+
+    // If we have a cached "connected" status, show the app immediately
+    // while checking in the background
+    const cached = localStorage.getItem('twitch_connected') === 'true';
+    if (cached) setTwitchSetupChecked(true);
+
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const timer = setTimeout(() => ctrl.abort(), 8000);
     fetch(`${(import.meta.env.VITE_API_URL || '')}/api/twitch-creds`, {
       headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}` },
       signal: ctrl.signal,
     })
       .then(r => r.ok ? r.json() : null)
       .then(s => {
-        setTwitchConnected(!!s?.twitch_username && !!s?.has_oauth);
+        if (s !== null) {
+          // Got a real response — update cache and state
+          const connected = !!s?.twitch_username && !!s?.has_oauth;
+          localStorage.setItem('twitch_connected', String(connected));
+          setTwitchConnected(connected);
+        }
+        // If s === null (server error) — keep cached value, don't change state
         setTwitchSetupChecked(true);
       })
-      .catch(() => setTwitchSetupChecked(true))
+      .catch(() => {
+        // Network error / timeout — use cached value, don't show setup modal
+        setTwitchSetupChecked(true);
+      })
       .finally(() => clearTimeout(timer));
   }, [user]);
 
@@ -235,6 +252,7 @@ export default function App() {
   if (twitchSetupChecked && !twitchConnected) {
     return (
       <TwitchSetup onDone={() => {
+        localStorage.setItem('twitch_connected', 'true');
         setTwitchConnected(true);
       }} />
     );
@@ -703,7 +721,7 @@ export default function App() {
         <TwitchSetup
           closeable
           onClose={() => setTwitchSetupOpen(false)}
-          onDone={() => { setTwitchSetupOpen(false); setTwitchConnected(true); }}
+          onDone={() => { setTwitchSetupOpen(false); localStorage.setItem('twitch_connected', 'true'); setTwitchConnected(true); }}
         />
       )}
 
