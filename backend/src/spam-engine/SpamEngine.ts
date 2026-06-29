@@ -327,14 +327,15 @@ export class SpamEngine {
 
     // 4b. EMOJI/SYMBOL FLOOD — detect repeating emoji spam even if not exact
     if (!normalizedMsg && message.trim().length > 0) {
-      // Message is pure emojis/symbols — check if user spammed similar earlier
-      const emojiRepeats = previousMessages.filter(m => {
-        const nm = normalize(m);
-        if (nm) return false; // skip text messages
-        return editRatio(m, message) >= 0.5;
-      }).length;
-      if (emojiRepeats >= 2) { score += 50; reasons.push('emoji flood'); }
-      else if (emojiRepeats >= 1) { score += 30; reasons.push('emoji repeat'); }
+      // Count ALL emoji-only messages from this user regardless of which emoji
+      const emojiOnlyPrev = previousMessages.filter(m => !normalize(m));
+      if (emojiOnlyPrev.length >= 3) { score += 60; reasons.push('emoji flood'); }
+      else if (emojiOnlyPrev.length >= 2) { score += 40; reasons.push('emoji flood'); }
+      else if (emojiOnlyPrev.length >= 1) {
+        // Also check similarity for single previous
+        const similar = emojiOnlyPrev.filter(m => editRatio(m, message) >= 0.4).length;
+        if (similar >= 1) { score += 30; reasons.push('emoji repeat'); }
+      }
     }
 
     // 4d. ROTATION PATTERN — A→B→A→B bot cycling between messages
