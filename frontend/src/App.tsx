@@ -182,12 +182,19 @@ export default function App() {
       setTwitchConnected(false);
       return;
     }
-    api.get<{ twitch_username: string | null; has_oauth: boolean }>('/api/twitch-creds').then(s => {
-      setTwitchConnected(!!s.twitch_username && !!s.has_oauth);
-      setTwitchSetupChecked(true);
-    }).catch(() => {
-      setTwitchSetupChecked(true);
-    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    fetch(`${(import.meta.env.VITE_API_URL || '')}/api/twitch-creds`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}` },
+      signal: ctrl.signal,
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(s => {
+        setTwitchConnected(!!s?.twitch_username && !!s?.has_oauth);
+        setTwitchSetupChecked(true);
+      })
+      .catch(() => setTwitchSetupChecked(true))
+      .finally(() => clearTimeout(timer));
   }, [user]);
 
   // === AUTH GATES ===
