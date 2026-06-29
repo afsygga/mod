@@ -132,35 +132,12 @@ export function TwitchSetup({ onDone, closeable, onClose }: Props) {
 
         {step === 'form' && (
           <div style={{ marginTop: '20px' }}>
-
-            {/* OAuth button — recommended */}
-            <a href="/api/twitch-oauth/connect" style={{ textDecoration: 'none', display: 'block', marginBottom: '16px' }}>
-              <button style={{
-                width: '100%', padding: '13px 18px', borderRadius: '11px', cursor: 'pointer',
-                background: 'rgba(145,70,255,0.18)', border: '1px solid rgba(145,70,255,0.4)',
-                color: '#c49dff', fontSize: '13px', fontWeight: 700,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '9px',
-                transition: 'background 0.15s',
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(145,70,255,0.28)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'rgba(145,70,255,0.18)')}>
-                <Twitch size={15} />
-                Подключить через Twitch OAuth
-              </button>
-            </a>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.07)' }} />
-              <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>или вручную</span>
-              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.07)' }} />
-            </div>
-
             <div style={{
               padding: '12px 14px', borderRadius: '10px',
               background: 'rgba(255,200,0,0.06)', border: '1px solid rgba(255,200,0,0.15)',
               fontSize: '12px', color: 'rgba(255,255,255,0.7)', marginBottom: '18px', lineHeight: 1.55,
             }}>
-              Этот аккаунт должен быть модератором на всех каналах, которые ты хочешь модерировать.
+              💡 Этот аккаунт должен быть модератором на всех каналах, которые ты хочешь модерировать.
             </div>
 
             <label style={labelStyle}>Twitch username бота</label>

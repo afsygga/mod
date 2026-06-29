@@ -56,12 +56,6 @@ export default function App() {
   const [twitchSetupChecked, setTwitchSetupChecked] = useState(false);
   const [twitchConnected, setTwitchConnected] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [twitchOAuthNotice, setTwitchOAuthNotice] = useState<{ type: 'success' | 'error'; msg: string } | null>(() => {
-    const p = new URLSearchParams(window.location.search);
-    if (p.get('twitch_connected')) return { type: 'success', msg: `Twitch подключён как @${p.get('twitch_login') || ''}` };
-    if (p.get('twitch_error')) return { type: 'error', msg: `Ошибка Twitch OAuth: ${p.get('twitch_error')}` };
-    return null;
-  });
   const prevUserRef = useRef<typeof user>(null);
   const msgIdRef = useRef(0);
   const autoModeRef = useRef(true);
@@ -69,17 +63,7 @@ export default function App() {
 
   useEffect(() => { autoModeRef.current = autoMode; }, [autoMode]);
 
-  // Clean up OAuth query params from URL and auto-dismiss notice
-  useEffect(() => {
-    if (!twitchOAuthNotice) return;
-    const url = new URL(window.location.href);
-    url.searchParams.delete('twitch_connected');
-    url.searchParams.delete('twitch_error');
-    url.searchParams.delete('twitch_login');
-    window.history.replaceState({}, '', url.toString());
-    const t = setTimeout(() => setTwitchOAuthNotice(null), 6000);
-    return () => clearTimeout(t);
-  }, [twitchOAuthNotice]);
+
 
   useEffect(() => {
     api.get<Channel[]>('/api/channels').then(setChannels).catch(console.error);
@@ -745,26 +729,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Twitch OAuth notice */}
-      <AnimatePresence>
-        {twitchOAuthNotice && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            style={{
-              position: 'fixed', bottom: '28px', left: '50%', transform: 'translateX(-50%)',
-              zIndex: 99998, padding: '12px 20px', borderRadius: '12px',
-              background: twitchOAuthNotice.type === 'success' ? 'rgba(0,200,120,0.15)' : 'rgba(240,71,71,0.15)',
-              border: `1px solid ${twitchOAuthNotice.type === 'success' ? 'rgba(0,200,120,0.3)' : 'rgba(240,71,71,0.3)'}`,
-              color: twitchOAuthNotice.type === 'success' ? '#00c878' : '#ff7070',
-              fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap',
-              backdropFilter: 'blur(20px)',
-            }}>
-            {twitchOAuthNotice.msg}
-          </motion.div>
-        )}
-      </AnimatePresence>
+
     </div>
   );
 }
