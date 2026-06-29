@@ -364,9 +364,13 @@ export class SpamEngine {
     const isEmoteOnly = (msg: string) => {
       const trimmed = msg.trim();
       if (!trimmed) return false;
-      // Safe regex — no nested quantifiers, no catastrophic backtracking
       if (!/^[A-Za-zА-Яа-яЁё0-9 ]+$/.test(trimmed)) return false;
-      return trimmed.split(/\s+/).every(w => /^[A-Z][a-zA-Z0-9]+$/.test(w) || /^[A-Z0-9]{2,}$/.test(w));
+      return trimmed.split(/\s+/).every(w =>
+        /^[A-Z][a-zA-Z0-9]+$/.test(w) ||                          // PogChamp, KEKW
+        /^[A-Z0-9]{2,}$/.test(w) ||                               // LUL, OMEGALUL
+        /^[А-ЯЁ]{2,}$/.test(w) ||                                 // ЧСВ (кириллица капс)
+        (/^[a-z][a-zA-Z0-9]{2,}$/.test(w) && /[A-Z]/.test(w))   // stintikGlasses, liliyaPog
+      );
     };
     if (isEmoteOnly(message)) {
       const emoteRepeats = previousMessages.filter(m => isEmoteOnly(m) && editRatio(m, message) >= 0.6).length;
