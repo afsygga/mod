@@ -1,4 +1,12 @@
 import 'dotenv/config';
+
+// Prevent unhandled rejections from crashing the process
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
