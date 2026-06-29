@@ -831,31 +831,44 @@ export class TwitchManager {
   // twitch stream_id → channel_name, persists across polls to detect end
   public liveStreamIds: Map<string, string> = new Map();
 
+  private pollInFlight = false; // prevent concurrent polls
+
   startStreamPoller(): void {
     if (this.streamPollInterval) return;
-    // On startup restore open sessions from DB so restarts don't create dupes
     db.query(`SELECT channel_name, twitch_stream_id FROM stream_sessions WHERE ended_at IS NULL AND twitch_stream_id IS NOT NULL`)
       .then(({ rows }) => {
         for (const r of rows) this.liveStreamIds.set(r.twitch_stream_id, r.channel_name);
         logger.info(`Restored ${rows.length} open stream session(s)`);
       }).catch(() => {});
-    this.streamPollInterval = setInterval(() => this.pollStreams(), 60_000);
-    // Delay first poll until channels are likely joined (30s)
-    setTimeout(() => this.pollStreams(), 30_000);
+    this.streamPollInterval = setInterval(() => {
+      this.pollStreams().catch(err => logger.error('pollStreams unhandled', err));
+    }, 60_000);
+    setTimeout(() => {
+      this.pollStreams().catch(err => logger.error('pollStreams unhandled', err));
+    }, 30_000);
   }
 
   async pollStreamsPublic(): Promise<void> {
-    return this.pollStreams();
+    await this.pollStreams().catch(err => logger.error('pollStreamsPublic error', err));
   }
 
   private async pollStreams(): Promise<void> {
+    if (this.pollInFlight) return; // skip if previous poll still running
     const channelNames = [...this.channels.keys()];
     if (channelNames.length === 0) return;
 
+    this.pollInFlight = true;
     try {
       const headers = await this.getHelixHeaders(null);
       const query = channelNames.map(c => `user_login=${encodeURIComponent(c)}`).join('&');
-      const res = await fetch(`https://api.twitch.tv/helix/streams?${query}&first=100`, { headers });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10_000); // 10s timeout
+      let res: Response;
+      try {
+        res = await fetch(`https://api.twitch.tv/helix/streams?${query}&first=100`, { headers, signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
       if (!res.ok) {
         logger.warn(`pollStreams: Helix returned ${res.status}`);
         return;
@@ -923,6 +936,8 @@ export class TwitchManager {
       }
     } catch (err) {
       logger.error('pollStreams error', err);
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
