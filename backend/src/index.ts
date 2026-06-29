@@ -190,7 +190,6 @@ async function start() {
 
     await runMigrations();
     await bootstrapAdmin();
-    twitchManager.startStreamPoller();
     TelegramBot.init();
 
     httpServer.listen(PORT, () => {
@@ -210,10 +209,6 @@ async function start() {
     for (const row of rows) {
       await twitchManager.joinChannel(row.name);
     }
-    // Trigger immediate stream poll now that channels are joined
-    setTimeout(() => {
-      twitchManager.pollStreamsPublic().catch(err => console.error('pollStreams startup error', err));
-    }, 3_000);
   } catch (err) {
     logger.error('Startup failed', err);
     process.exit(1);

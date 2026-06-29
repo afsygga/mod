@@ -192,15 +192,26 @@ export function Analytics() {
   const [init, setInit] = useState(false);
 
   useEffect(() => {
+    const loadStreams = () =>
+      api.get<StreamSession[]>('/api/admin/streams').catch(() => [] as StreamSession[]);
+
+    const sync = () =>
+      api.post<any>('/api/admin/streams/sync', {})
+        .then(() => loadStreams()).then(setStreams)
+        .catch(() => {});
+
     Promise.all([
       api.get<{ name: string }[]>('/api/channels').catch(() => [] as { name: string }[]),
-      api.get<StreamSession[]>('/api/admin/streams').catch(() => [] as StreamSession[]),
+      loadStreams(),
     ]).then(([chs, strms]) => {
       const names = chs.map(c => c.name);
       setChannels(names);
       setStreams(strms);
       if (names.length > 0) setSelectedChannel(names[0]);
-    }).finally(() => setInit(true));
+    }).finally(() => { setInit(true); sync(); });
+
+    const interval = setInterval(sync, 60_000);
+    return () => clearInterval(interval);
   }, []);
 
   const loadModsFromLogs = useCallback((ch: string) => {
