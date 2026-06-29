@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 
 const BASE = import.meta.env.VITE_API_URL || '';
 const TOKEN_KEY = 'auth_token';
+const USER_KEY = 'auth_user';
 
 export interface AuthUser {
   id: number;
@@ -25,61 +26,68 @@ interface Ctx {
 
 const AuthCtx = createContext<Ctx | null>(null);
 
+function getCachedUser(): AuthUser | null {
+  try { const s = localStorage.getItem(USER_KEY); return s ? JSON.parse(s) : null; } catch { return null; }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(() => {
-    // Restore cached user so UI doesn't flash to login on refresh
-    try { const s = localStorage.getItem('auth_user'); return s ? JSON.parse(s) : null; } catch { return null; }
-  });
+  const cachedUser = getCachedUser();
+  const hasToken = !!localStorage.getItem(TOKEN_KEY);
+
+  // If we have a cached user + token → show UI immediately, no loading screen
+  const [user, setUser] = useState<AuthUser | null>(cachedUser);
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
-  const [loading, setLoading] = useState(true);
+  // loading=true only when we have a token but no cached user (fresh login on new device)
+  const [loading, setLoading] = useState(!cachedUser && hasToken);
   const [networkError, setNetworkError] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const refreshingRef = useRef(false);
+  const inFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (refreshingRef.current) return; // already in flight
+    if (inFlightRef.current) return;
     const t = localStorage.getItem(TOKEN_KEY);
-    if (!t) { setUser(null); setLoading(false); setNetworkError(false); return; }
-
-    refreshingRef.current = true;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000); // 10s timeout
+    if (!t) {
+      localStorage.removeItem(USER_KEY);
+      setUser(null); setLoading(false); setNetworkError(false);
+      return;
+    }
+    inFlightRef.current = true;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
     try {
       const r = await fetch(`${BASE}/api/auth/me`, {
         headers: { Authorization: `Bearer ${t}` },
-        signal: controller.signal,
+        signal: ctrl.signal,
       });
       if (r.status === 401) {
         localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem('auth_user');
+        localStorage.removeItem(USER_KEY);
         setToken(null); setUser(null); setNetworkError(false);
       } else if (r.ok) {
         const d = await r.json();
-        localStorage.setItem('auth_user', JSON.stringify(d.user));
-        setUser(d.user);
-        setNetworkError(false);
+        localStorage.setItem(USER_KEY, JSON.stringify(d.user));
+        setUser(d.user); setNetworkError(false);
       } else {
-        // 5xx or other server error — keep token, retry
         setNetworkError(true);
       }
     } catch {
-      // Network error or timeout — keep token, retry
       setNetworkError(true);
     } finally {
-      clearTimeout(timeout);
-      refreshingRef.current = false;
+      clearTimeout(timer);
+      inFlightRef.current = false;
       setLoading(false);
     }
   }, []);
 
-  // Retry every 3s when network error (faster recovery)
+  // Initial background refresh — validates the cached session
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Retry every 4s on network error
   useEffect(() => {
     if (!networkError) return;
-    const id = setInterval(() => refresh(), 3000);
+    const id = setInterval(() => refresh(), 4000);
     return () => clearInterval(id);
   }, [networkError, refresh]);
-
-  useEffect(() => { refresh(); }, [refresh]);
 
   const loginWithGoogle = useCallback(async (credential: string) => {
     setError(null);
@@ -95,9 +103,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { ok: false, error: d.error };
       }
       localStorage.setItem(TOKEN_KEY, d.token);
-      localStorage.setItem('auth_user', JSON.stringify(d.user));
-      setToken(d.token);
-      setUser(d.user);
+      localStorage.setItem(USER_KEY, JSON.stringify(d.user));
+      setToken(d.token); setUser(d.user);
       return { ok: true };
     } catch (err: any) {
       setError(err?.message || 'network error');
@@ -113,13 +120,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }).catch(() => {});
     }
     localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem('auth_user');
-    setToken(null);
-    setUser(null);
-    // Force Google to show account picker next time, not auto-select
-    try {
-      (window as any).google?.accounts?.id?.disableAutoSelect?.();
-    } catch {}
+    localStorage.removeItem(USER_KEY);
+    setToken(null); setUser(null);
+    try { (window as any).google?.accounts?.id?.disableAutoSelect?.(); } catch {}
   }, []);
 
   return (
@@ -135,7 +138,6 @@ export function useAuth() {
   return ctx;
 }
 
-// Helper to make authenticated fetch
 export function authFetch(path: string, init: RequestInit = {}) {
   const t = localStorage.getItem(TOKEN_KEY);
   const headers = new Headers(init.headers || {});
