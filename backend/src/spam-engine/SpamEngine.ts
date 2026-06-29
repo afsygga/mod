@@ -385,9 +385,11 @@ export class SpamEngine {
 
     // 6. COSINE SIMILARITY
     let maxSim = 0;
+    let similarCount = 0; // how many previous messages are similar to current
     for (const prev of previousMessages) {
       const sim = cosineSimilarity(message, prev);
       if (sim > maxSim) maxSim = sim;
+      if (sim >= 0.5) similarCount++;
     }
     const simPct = Math.round(maxSim * 100);
     if (simPct >= this.settings.similarityThreshold && previousMessages.length > 0) {
@@ -397,6 +399,9 @@ export class SpamEngine {
       score += 10;
       reasons.push(`partial similarity ${simPct}%`);
     }
+    // Multiple previous messages on the same topic = stronger spam signal
+    if (similarCount >= 2) { score += 30; reasons.push('repeated topic'); }
+    else if (similarCount >= 1 && previousMessages.length >= 2) { score += 15; reasons.push('repeated topic'); }
 
     // 7. GENERAL BURST (memory window)
     if (recent.length >= this.settings.burstLimit) { score += 20; reasons.push('burst activity'); }
