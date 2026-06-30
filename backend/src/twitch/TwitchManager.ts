@@ -492,7 +492,14 @@ export class TwitchManager {
 
   private async setGame(channelName: string, gameName: string, ownerEmail: string | null): Promise<string> {
     try {
-      const headers = await this.getHelixHeaders(ownerEmail);
+      // Prefer broadcaster token if available
+      const { rows: btRows } = await db.query(
+        'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channelName]
+      );
+      const clientId = process.env.TWITCH_CLIENT_ID || '';
+      const headers = btRows[0]?.access_token
+        ? { 'Client-Id': clientId, 'Authorization': `Bearer ${btRows[0].access_token}`, 'Content-Type': 'application/json' }
+        : await this.getHelixHeaders(ownerEmail);
       // 1. Search for the game
       const searchRes = await fetch(`https://api.twitch.tv/helix/games?name=${encodeURIComponent(gameName)}`, { headers });
       const searchData: any = await searchRes.json();

@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import BroadcasterAuth from './pages/BroadcasterAuth';
 import { AuthProvider } from './hooks/useAuth';
 import './index.css';
 
@@ -13,10 +14,14 @@ Object.assign(versionBadge.style, {
 });
 document.body.appendChild(versionBadge);
 
+const isBroadcasterPage = window.location.pathname === '/broadcaster';
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AuthProvider>
-      <App />
-    </AuthProvider>
+    {isBroadcasterPage ? <BroadcasterAuth /> : (
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    )}
   </React.StrictMode>
 );

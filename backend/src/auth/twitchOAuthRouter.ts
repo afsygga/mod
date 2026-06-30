@@ -26,6 +26,19 @@ function getFrontendUrl(): string {
   return process.env.FRONTEND_URL || 'https://afsyg.gay';
 }
 
+function getBroadcasterRedirectUri(req: Request): string {
+  return process.env.TWITCH_BROADCASTER_REDIRECT_URI ||
+    (process.env.TWITCH_REDIRECT_URI || '').replace('/callback', '/broadcaster-callback') ||
+    `${req.protocol}://${req.get('host')}/api/twitch-oauth/broadcaster-callback`;
+}
+
+const BROADCASTER_SCOPES = [
+  'channel:manage:broadcast',
+  'moderation:read',
+  'moderator:read:moderators',
+  'user:read:email',
+].join(' ');
+
 // Step 1: return OAuth URL as JSON (called via fetch with Bearer token, then redirect from JS)
 twitchOAuthRouter.get('/connect-url', authenticate, (req: Request, res: Response) => {
   const clientId = process.env.TWITCH_CLIENT_ID;
@@ -107,5 +120,78 @@ twitchOAuthRouter.get('/callback', async (req: Request, res: Response) => {
   } catch (err) {
     logger.error('Twitch OAuth callback error', err);
     res.redirect(`${frontendUrl}?twitch_error=callback_failed`);
+  }
+});
+
+// ── Broadcaster connect (no site account required) ───────────────────────────
+
+twitchOAuthRouter.get('/broadcaster-connect', (req: Request, res: Response) => {
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  if (!clientId) return res.status(500).json({ error: 'TWITCH_CLIENT_ID not set' });
+
+  const state = Buffer.from(JSON.stringify({ broadcaster: true, ts: Date.now() })).toString('base64url');
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: getBroadcasterRedirectUri(req),
+    response_type: 'code',
+    scope: BROADCASTER_SCOPES,
+    state,
+    force_verify: 'true',
+  });
+  res.redirect(`https://id.twitch.tv/oauth2/authorize?${params}`);
+});
+
+twitchOAuthRouter.get('/broadcaster-callback', async (req: Request, res: Response) => {
+  const { code, error } = req.query;
+  const frontendUrl = getFrontendUrl();
+
+  if (error) return res.redirect(`${frontendUrl}/broadcaster?error=${encodeURIComponent(String(error))}`);
+  if (!code) return res.redirect(`${frontendUrl}/broadcaster?error=missing_code`);
+
+  try {
+    const clientId = process.env.TWITCH_CLIENT_ID || '';
+    const clientSecret = process.env.TWITCH_CLIENT_SECRET || '';
+    if (!clientSecret) return res.redirect(`${frontendUrl}/broadcaster?error=not_configured`);
+
+    const tokenRes = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code: String(code),
+        grant_type: 'authorization_code',
+        redirect_uri: getBroadcasterRedirectUri(req),
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      logger.error('Broadcaster token exchange failed', await tokenRes.text());
+      return res.redirect(`${frontendUrl}/broadcaster?error=token_exchange_failed`);
+    }
+
+    const tokenData: any = await tokenRes.json();
+    const accessToken: string = tokenData.access_token;
+
+    const userRes = await fetch('https://api.twitch.tv/helix/users', {
+      headers: { 'Client-Id': clientId, 'Authorization': `Bearer ${accessToken}` },
+    });
+    if (!userRes.ok) return res.redirect(`${frontendUrl}/broadcaster?error=user_fetch_failed`);
+
+    const userData: any = await userRes.json();
+    const twitchUser = userData.data?.[0];
+    if (!twitchUser) return res.redirect(`${frontendUrl}/broadcaster?error=no_user_data`);
+
+    await db.query(`
+      INSERT INTO broadcaster_tokens (twitch_login, twitch_id, access_token, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (twitch_login) DO UPDATE SET access_token=$3, twitch_id=$2, updated_at=NOW()
+    `, [twitchUser.login, twitchUser.id, accessToken]);
+
+    logger.info(`Broadcaster OAuth connected: ${twitchUser.login}`);
+    res.redirect(`${frontendUrl}/broadcaster?success=1&login=${encodeURIComponent(twitchUser.login)}`);
+  } catch (err) {
+    logger.error('Broadcaster OAuth callback error', err);
+    res.redirect(`${frontendUrl}/broadcaster?error=callback_failed`);
   }
 });
