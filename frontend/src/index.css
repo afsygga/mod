@@ -55,9 +55,9 @@ body::after {
 button { transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1); }
 .glass, .glass-card, .glass-strong, [data-glass] {
   transition: background 0.22s ease, border-color 0.22s ease;
-  /* Forces its own compositing layer so backdrop-filter doesn't flicker on scroll repaint */
-  will-change: backdrop-filter;
-  transform: translateZ(0);
+  isolation: isolate;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 .glass {

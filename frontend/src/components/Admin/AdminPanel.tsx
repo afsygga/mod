@@ -117,7 +117,7 @@ function Overview() {
   const [stats, setStats] = useState<any>(null);
   const [timeline, setTimeline] = useState<any[]>([]);
   const [period, setPeriod] = useState<7 | 14 | 30>(14);
-  const [hoveredBar, setHoveredBar] = useState<number | null>(null);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [online, setOnline] = useState<{ count: number; users: any[] }>({ count: 0, users: [] });
   const [live, setLive] = useState<LiveStats | null>(null);
   const [channelActivity, setChannelActivity] = useState<ChannelActivity[]>([]);
@@ -157,14 +157,44 @@ function Overview() {
     ? ((stats.actions.reduce((s: number, a: any) => s + a.c, 0) / stats.total_messages) * 100).toFixed(2)
     : '0';
 
-  // Trend line points for timeline chart
-  const CHART_H = 106;
-  const trendPoints = filteredTimeline.length > 1
-    ? filteredTimeline.map((t, i) => {
-        const x = (i / (filteredTimeline.length - 1)) * 100;
-        const y = CHART_H - Math.max(2, (t.total / maxBar) * CHART_H);
-        return `${x},${y}`;
-      }).join(' ')
+  // SVG area chart helpers
+  const SVG_W = 800;
+  const SVG_H = 200;
+  const PAD_L = 44;
+  const PAD_R = 12;
+  const PAD_T = 12;
+  const PAD_B = 28;
+  const chartW = SVG_W - PAD_L - PAD_R;
+  const chartH = SVG_H - PAD_T - PAD_B;
+
+  function smoothPath(points: [number, number][]): string {
+    if (points.length < 2) return '';
+    let d = `M ${points[0][0]} ${points[0][1]}`;
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1];
+      const curr = points[i];
+      const cpx = (prev[0] + curr[0]) / 2;
+      d += ` C ${cpx} ${prev[1]}, ${cpx} ${curr[1]}, ${curr[0]} ${curr[1]}`;
+    }
+    return d;
+  }
+
+  const chartPoints: [number, number][] = filteredTimeline.map((t, i) => {
+    const x = PAD_L + (filteredTimeline.length < 2 ? chartW / 2 : (i / (filteredTimeline.length - 1)) * chartW);
+    const y = PAD_T + chartH - Math.max(2, (t.total / maxBar) * chartH);
+    return [x, y];
+  });
+
+  const spamPoints: [number, number][] = filteredTimeline.map((t, i) => {
+    const x = PAD_L + (filteredTimeline.length < 2 ? chartW / 2 : (i / (filteredTimeline.length - 1)) * chartW);
+    const y = PAD_T + chartH - (t.total > 0 ? (t.spam / maxBar) * chartH : 0);
+    return [x, y];
+  });
+
+  const totalLine = smoothPath(chartPoints);
+  const spamLine = smoothPath(spamPoints);
+  const areaPath = chartPoints.length > 0
+    ? `${totalLine} L ${chartPoints[chartPoints.length - 1][0]} ${PAD_T + chartH} L ${PAD_L} ${PAD_T + chartH} Z`
     : '';
 
   // Donut chart for auto vs manual
@@ -290,94 +320,119 @@ function Overview() {
           </div>
         </div>
 
-        <div style={{ position: 'relative', height: '154px' }}>
-          {/* SVG trend overlay */}
-          {filteredTimeline.length > 1 && (
-            <svg style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: `${CHART_H}px`, pointerEvents: 'none', overflow: 'visible' }}
-              preserveAspectRatio="none" viewBox={`0 0 100 ${CHART_H}`}>
-              <defs>
-                <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#ffc800" stopOpacity="0.18" />
-                  <stop offset="100%" stopColor="#ffc800" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-              {/* Gradient fill area */}
-              <polyline
-                points={`0,${CHART_H} ${trendPoints} 100,${CHART_H}`}
-                fill="url(#trendGrad)" stroke="none" />
-              {/* Trend line */}
-              <polyline
-                points={trendPoints}
-                fill="none" stroke="#ffc800" strokeWidth="0.8" strokeOpacity="0.6"
-                strokeLinejoin="round" strokeLinecap="round" />
-            </svg>
-          )}
+        {/* SVG area chart */}
+        <div style={{ position: 'relative', width: '100%' }}>
+          <svg
+            viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+            preserveAspectRatio="none"
+            style={{ width: '100%', height: '200px', display: 'block', overflow: 'visible' }}
+            onMouseLeave={() => setHoveredIdx(null)}
+            onMouseMove={(e) => {
+              const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+              const mx = (e.clientX - rect.left) / rect.width * SVG_W;
+              if (filteredTimeline.length === 0) return;
+              let best = 0;
+              let bestDist = Infinity;
+              chartPoints.forEach(([cx], i) => {
+                const d = Math.abs(cx - mx);
+                if (d < bestDist) { bestDist = d; best = i; }
+              });
+              setHoveredIdx(best);
+            }}
+          >
+            <defs>
+              <linearGradient id="areaGradPurple" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#a070ff" stopOpacity="0.45" />
+                <stop offset="100%" stopColor="#a070ff" stopOpacity="0.02" />
+              </linearGradient>
+              <clipPath id="chartClip">
+                <rect x={PAD_L} y={PAD_T} width={chartW} height={chartH} />
+              </clipPath>
+            </defs>
 
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '130px', paddingBottom: '24px', position: 'relative' }}>
-            {/* Y-axis guide lines */}
-            {[0.25, 0.5, 0.75, 1].map(f => (
-              <div key={f} style={{
-                position: 'absolute', left: 0, right: 0, bottom: `calc(24px + ${f * CHART_H}px)`,
-                borderTop: '1px solid rgba(255,255,255,0.04)',
-                fontSize: '8px', color: 'rgba(255,255,255,0.18)',
-                paddingLeft: '2px', lineHeight: '1',
-              }}>
-                {Math.round(maxBar * f).toLocaleString()}
-              </div>
-            ))}
-
-            {filteredTimeline.map((t, i) => {
-              const totalH = Math.max(2, (t.total / maxBar) * CHART_H);
-              const spamH = t.total > 0 ? (t.spam / t.total) * totalH : 0;
-              const isHovered = hoveredBar === i;
-              const d = new Date(t.day);
+            {/* Grid lines + Y labels */}
+            {[0.25, 0.5, 0.75, 1].map(f => {
+              const y = PAD_T + chartH - f * chartH;
               return (
-                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', position: 'relative' }}
-                  onMouseEnter={() => setHoveredBar(i)} onMouseLeave={() => setHoveredBar(null)}>
-                  {isHovered && (
-                    <div style={{
-                      position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
-                      background: 'rgba(8,8,12,0.95)', border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: '8px', padding: '6px 10px', fontSize: '10px', whiteSpace: 'nowrap', zIndex: 10,
-                      marginBottom: '4px', pointerEvents: 'none',
-                    }}>
-                      <div style={{ fontWeight: 700, color: '#fff', marginBottom: '2px' }}>
-                        {d.getDate()}.{d.getMonth() + 1}.{d.getFullYear()}
-                      </div>
-                      <div style={{ color: 'rgba(255,255,255,0.6)' }}>Сообщений: <b style={{ color: '#fff' }}>{t.total.toLocaleString()}</b></div>
-                      <div style={{ color: 'rgba(255,89,89,0.9)' }}>Спам: <b>{t.spam.toLocaleString()}</b> ({t.total > 0 ? Math.round(t.spam / t.total * 100) : 0}%)</div>
-                    </div>
-                  )}
-                  <div style={{ width: '100%', height: `${totalH}px`, borderRadius: '4px 4px 0 0', overflow: 'hidden', position: 'relative',
-                    background: isHovered ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.1)',
-                    transition: 'background 0.15s',
-                  }}>
-                    <div style={{
-                      position: 'absolute', bottom: 0, left: 0, right: 0, height: `${spamH}px`,
-                      background: 'linear-gradient(to top, rgba(255,89,89,0.85), rgba(255,152,0,0.6))',
-                    }} />
-                  </div>
-                  <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.28)', marginTop: '5px', textAlign: 'center' }}>
-                    {d.getDate()}.{d.getMonth() + 1}
-                  </div>
-                </div>
+                <g key={f}>
+                  <line x1={PAD_L} y1={y} x2={PAD_L + chartW} y2={y}
+                    stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="4 4" />
+                  <text x={PAD_L - 4} y={y + 3} textAnchor="end"
+                    style={{ fontSize: '9px', fill: 'rgba(255,255,255,0.22)', fontFamily: 'Inter,sans-serif' }}>
+                    {Math.round(maxBar * f).toLocaleString()}
+                  </text>
+                </g>
               );
             })}
-          </div>
+
+            {/* Area fill */}
+            {areaPath && (
+              <path d={areaPath} fill="url(#areaGradPurple)" clipPath="url(#chartClip)" />
+            )}
+
+            {/* Total messages smooth line */}
+            {totalLine && (
+              <path d={totalLine} fill="none" stroke="#a070ff" strokeWidth="2" strokeLinejoin="round" clipPath="url(#chartClip)" />
+            )}
+
+            {/* Spam smooth line */}
+            {spamLine && (
+              <path d={spamLine} fill="none" stroke="#00e5cc" strokeWidth="1.5" strokeLinejoin="round" clipPath="url(#chartClip)" />
+            )}
+
+            {/* X-axis labels */}
+            {filteredTimeline.map((t, i) => {
+              if (filteredTimeline.length > 14 && i % 2 !== 0) return null;
+              const d = new Date(t.day);
+              const x = chartPoints[i]?.[0] ?? 0;
+              return (
+                <text key={i} x={x} y={SVG_H - 4} textAnchor="middle"
+                  style={{ fontSize: '9px', fill: 'rgba(255,255,255,0.25)', fontFamily: 'Inter,sans-serif' }}>
+                  {d.getDate()}.{d.getMonth() + 1}
+                </text>
+              );
+            })}
+
+            {/* Hover crosshair */}
+            {hoveredIdx !== null && chartPoints[hoveredIdx] && (() => {
+              const [cx] = chartPoints[hoveredIdx];
+              const t = filteredTimeline[hoveredIdx];
+              const d = new Date(t.day);
+              const spamPct = t.total > 0 ? Math.round(t.spam / t.total * 100) : 0;
+              const ttX = cx > SVG_W * 0.7 ? cx - 120 : cx + 8;
+              const ttY = PAD_T;
+              return (
+                <>
+                  <line x1={cx} y1={PAD_T} x2={cx} y2={PAD_T + chartH}
+                    stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="3 3" />
+                  <circle cx={cx} cy={chartPoints[hoveredIdx][1]} r="4" fill="#a070ff" stroke="#fff" strokeWidth="1.5" />
+                  <circle cx={cx} cy={spamPoints[hoveredIdx][1]} r="3" fill="#00e5cc" stroke="#fff" strokeWidth="1.5" />
+                  {/* Tooltip box */}
+                  <rect x={ttX} y={ttY} width="112" height="58" rx="6" ry="6"
+                    fill="rgba(8,8,14,0.95)" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
+                  <text x={ttX + 8} y={ttY + 14} style={{ fontSize: '10px', fill: '#fff', fontWeight: 700, fontFamily: 'Inter,sans-serif' }}>
+                    {d.getDate()}.{d.getMonth() + 1}.{d.getFullYear()}
+                  </text>
+                  <text x={ttX + 8} y={ttY + 28} style={{ fontSize: '9px', fill: 'rgba(200,180,255,0.9)', fontFamily: 'Inter,sans-serif' }}>
+                    Всего: {t.total.toLocaleString()}
+                  </text>
+                  <text x={ttX + 8} y={ttY + 42} style={{ fontSize: '9px', fill: '#00e5cc', fontFamily: 'Inter,sans-serif' }}>
+                    Спам: {t.spam.toLocaleString()} ({spamPct}%)
+                  </text>
+                </>
+              );
+            })()}
+          </svg>
         </div>
 
         <div style={{ display: 'flex', gap: '16px', fontSize: '10px', marginTop: '4px' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'rgba(255,255,255,0.35)' }}>
-            <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'rgba(255,255,255,0.15)', display: 'inline-block' }} />
+          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'rgba(180,150,255,0.8)' }}>
+            <span style={{ width: '24px', height: '2px', background: '#a070ff', display: 'inline-block', borderRadius: '2px' }} />
             Все сообщения
           </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'rgba(255,89,89,0.8)' }}>
-            <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'rgba(255,89,89,0.7)', display: 'inline-block' }} />
+          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#00e5cc' }}>
+            <span style={{ width: '24px', height: '2px', background: '#00e5cc', display: 'inline-block', borderRadius: '2px' }} />
             Спам
-          </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'rgba(255,200,0,0.6)' }}>
-            <span style={{ width: '24px', height: '2px', background: '#ffc800', display: 'inline-block', borderRadius: '2px', opacity: 0.7 }} />
-            Тренд
           </span>
         </div>
       </div>

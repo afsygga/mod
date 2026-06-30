@@ -31,7 +31,8 @@ interface StreamStats {
   session: StreamSession;
   actions: { action: string; c: number }[];
   timeline: { hour: string; spam: number; total: number }[];
-  top_spammers: { username: string; actions: number }[];
+  top_spammers: { username: string; mute_count: number }[];
+  buckets: { bucket: string; msgs: number; spam: number }[];
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -90,8 +91,13 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
 
   if (!data) return <div style={{ color: 'rgba(255,255,255,0.3)', padding: '40px', fontSize: '13px' }}>Загрузка...</div>;
 
-  const { session, actions, timeline, top_spammers } = data;
+  const { session, actions, timeline, top_spammers, buckets } = data;
   const maxBar = Math.max(...timeline.map(t => t.total), 1);
+  const maxBucket = Math.max(...(buckets || []).map(b => b.msgs), 1);
+  const totalMsgs = (buckets || []).reduce((s, b) => s + b.msgs, 0);
+  const totalSpam = (buckets || []).reduce((s, b) => s + b.spam, 0);
+  const avgMsgsPerMin = session.duration_seconds > 0 ? (totalMsgs / (session.duration_seconds / 60)).toFixed(1) : '—';
+  const spamRate = totalMsgs > 0 ? Math.round(totalSpam / totalMsgs * 100) : 0;
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
@@ -139,6 +145,46 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
         </div>
       )}
 
+      {/* Message stats summary */}
+      {totalMsgs > 0 && (
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+          {[
+            { label: 'Всего сообщений', value: totalMsgs.toLocaleString(), color: '#a070ff' },
+            { label: 'Сред. сообщ/мин', value: avgMsgsPerMin, color: '#5b9eff' },
+            { label: 'Спам', value: totalSpam.toLocaleString(), color: '#ff5959' },
+            { label: 'Спам %', value: `${spamRate}%`, color: '#ff9800' },
+          ].map(({ label, value, color }) => (
+            <div key={label} style={{ padding: '12px 16px', borderRadius: '12px', flex: '1', minWidth: '80px', background: `${color}0d`, border: `1px solid ${color}22` }}>
+              <div style={{ fontSize: '22px', fontWeight: 800, color, lineHeight: 1 }}>{value}</div>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginTop: '5px' }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 10-min bucket mini chart */}
+      {buckets && buckets.length > 0 && (
+        <div style={{ marginBottom: '16px', padding: '18px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '12px' }}>
+            Активность по 10-мин интервалам
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '60px' }}>
+            {buckets.map((b, i) => {
+              const h = Math.max(2, (b.msgs / maxBucket) * 60);
+              const sh = b.msgs > 0 ? (b.spam / b.msgs) * h : 0;
+              return (
+                <div key={i} title={`${new Date(b.bucket).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — ${b.msgs} сообщ., ${b.spam} спам`}
+                  style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '60px' }}>
+                  <div style={{ width: '100%', height: `${h}px`, borderRadius: '2px 2px 0 0', background: 'rgba(160,112,255,0.3)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${sh}px`, background: 'rgba(0,229,204,0.6)' }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         {/* Timeline */}
         {timeline.length > 0 && (
@@ -169,7 +215,7 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
               <div key={s.username} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                 <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.2)', minWidth: '18px', fontWeight: 700 }}>#{i + 1}</span>
                 <span style={{ flex: 1, fontSize: '12px', color: 'rgba(255,255,255,0.75)', fontWeight: 500 }}>{s.username}</span>
-                <span style={{ fontSize: '12px', fontWeight: 700, color: '#ff7070' }}>{s.actions}</span>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#ff7070' }}>{s.mute_count}</span>
               </div>
             ))}
           </div>
@@ -190,6 +236,11 @@ export function Analytics() {
   const [modsLoading, setModsLoading] = useState(false);
   const [modsError, setModsError] = useState<string | null>(null);
   const [init, setInit] = useState(false);
+  const [heatmap, setHeatmap] = useState<{ day: string; count: number }[]>([]);
+
+  useEffect(() => {
+    api.get<{ day: string; count: number }[]>('/api/admin/stats/heatmap').then(setHeatmap).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const loadStreams = () =>
@@ -445,6 +496,100 @@ export function Analytics() {
         {/* ── STREAMS ── */}
         {section === 'streams' && !selectedStream && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+
+            {/* Activity Heatmap */}
+            {heatmap.length > 0 && (() => {
+              // Build 112-day grid: 16 cols (weeks) x 7 rows (Mon-Sun)
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              // Align to Monday of current week
+              const dayOfWeek = today.getDay(); // 0=Sun
+              const daysFromMon = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+              const endDate = new Date(today);
+              endDate.setDate(today.getDate() - daysFromMon + 6); // end on coming Sunday
+
+              const countMap: Record<string, number> = {};
+              heatmap.forEach(h => { countMap[h.day.slice(0, 10)] = h.count; });
+              const maxCount = Math.max(...heatmap.map(h => h.count), 1);
+
+              const COLS = 16;
+              const ROWS = 7;
+              const CELL = 12;
+              const GAP = 3;
+              const LEFT_PAD = 22;
+
+              // Build grid: col=week (0=oldest), row=day-of-week (0=Mon)
+              const cells: { col: number; row: number; date: Date; count: number }[] = [];
+              const startDate = new Date(endDate);
+              startDate.setDate(endDate.getDate() - (COLS * ROWS - 1));
+
+              for (let i = 0; i < COLS * ROWS; i++) {
+                const d = new Date(startDate);
+                d.setDate(startDate.getDate() + i);
+                const col = Math.floor(i / ROWS);
+                const row = i % ROWS;
+                const key = d.toISOString().slice(0, 10);
+                cells.push({ col, row, date: d, count: countMap[key] || 0 });
+              }
+
+              // Month labels: find first cell of each month
+              const monthLabels: { col: number; label: string }[] = [];
+              const seenMonths = new Set<string>();
+              cells.forEach(c => {
+                const monthKey = `${c.date.getFullYear()}-${c.date.getMonth()}`;
+                if (!seenMonths.has(monthKey) && c.row === 0) {
+                  seenMonths.add(monthKey);
+                  monthLabels.push({
+                    col: c.col,
+                    label: c.date.toLocaleDateString('ru-RU', { month: 'short' }),
+                  });
+                }
+              });
+
+              const svgW = LEFT_PAD + COLS * (CELL + GAP);
+              const svgH = 18 + ROWS * (CELL + GAP);
+
+              return (
+                <div style={{ marginBottom: '24px', padding: '18px 20px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '14px' }}>
+                    Активность за 16 недель
+                  </div>
+                  <svg viewBox={`0 0 ${svgW} ${svgH}`} style={{ width: '100%', maxWidth: `${svgW}px`, height: 'auto', display: 'block', overflow: 'visible' }}>
+                    {/* Month labels */}
+                    {monthLabels.map(({ col, label }) => (
+                      <text key={label + col} x={LEFT_PAD + col * (CELL + GAP)} y={10}
+                        style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.3)', fontFamily: 'Inter,sans-serif' }}>
+                        {label}
+                      </text>
+                    ))}
+                    {/* Day labels */}
+                    {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((label, row) => (
+                      row % 2 === 0 ? (
+                        <text key={label} x={0} y={18 + row * (CELL + GAP) + CELL - 2}
+                          style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.25)', fontFamily: 'Inter,sans-serif' }}>
+                          {label}
+                        </text>
+                      ) : null
+                    ))}
+                    {/* Cells */}
+                    {cells.map(({ col, row, date, count }) => {
+                      const opacity = count === 0 ? 0.06 : 0.08 + (count / maxCount) * 0.82;
+                      return (
+                        <rect key={`${col}-${row}`}
+                          x={LEFT_PAD + col * (CELL + GAP)}
+                          y={18 + row * (CELL + GAP)}
+                          width={CELL} height={CELL} rx={2} ry={2}
+                          fill={`rgba(0,200,120,${opacity.toFixed(2)})`}
+                        >
+                          <title>{date.toLocaleDateString('ru-RU')}: {count} сообщений</title>
+                        </rect>
+                      );
+                    })}
+                  </svg>
+                </div>
+              );
+            })()}
+
             {streams.length > 0 && (
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
                 <button onClick={async () => {

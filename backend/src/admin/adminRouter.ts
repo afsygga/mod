@@ -481,7 +481,7 @@ adminRouter.get('/streams/:id/stats', async (req: Request, res: Response) => {
     if (!session) return res.status(404).json({ error: 'not found' });
 
     const endAt = session.ended_at || new Date().toISOString();
-    const [actions, timeline, topSpammers] = await Promise.all([
+    const [actions, timeline, topSpammers, buckets] = await Promise.all([
       db.query(`
         SELECT action, COUNT(*)::int AS c
         FROM moderation_logs
@@ -498,10 +498,21 @@ adminRouter.get('/streams/:id/stats', async (req: Request, res: Response) => {
         GROUP BY hour ORDER BY hour
       `, [session.channel_name, session.started_at, endAt]),
       db.query(`
-        SELECT username, COUNT(*)::int AS actions
+        SELECT username, COUNT(*)::int AS mute_count
         FROM moderation_logs
         WHERE channel_name=$1 AND created_at BETWEEN $2 AND $3
-        GROUP BY username ORDER BY actions DESC LIMIT 10
+          AND action IN ('MUTED', 'AUTO_MUTED')
+        GROUP BY username ORDER BY mute_count DESC LIMIT 5
+      `, [session.channel_name, session.started_at, endAt]),
+      db.query(`
+        SELECT
+          date_trunc('minute', created_at) -
+            (EXTRACT(minute FROM created_at)::int % 10) * INTERVAL '1 minute' AS bucket,
+          COUNT(*)::int AS msgs,
+          COUNT(*) FILTER (WHERE spam_score >= 70)::int AS spam
+        FROM messages
+        WHERE channel_name=$1 AND created_at BETWEEN $2 AND $3
+        GROUP BY bucket ORDER BY bucket
       `, [session.channel_name, session.started_at, endAt]),
     ]);
 
@@ -510,6 +521,7 @@ adminRouter.get('/streams/:id/stats', async (req: Request, res: Response) => {
       actions: actions.rows,
       timeline: timeline.rows,
       top_spammers: topSpammers.rows,
+      buckets: buckets.rows,
     });
   } catch (err) {
     res.status(500).json({ error: 'stream stats failed' });
@@ -585,5 +597,24 @@ adminRouter.get('/stats/efficiency', async (_req: Request, res: Response) => {
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'efficiency failed' });
+  }
+});
+
+// Activity heatmap — daily message counts for last 112 days
+adminRouter.get('/stats/heatmap', async (req: Request, res: Response) => {
+  try {
+    const channel = (req.query.channel as string) || null;
+    const { rows } = await db.query(`
+      SELECT
+        date_trunc('day', created_at)::date AS day,
+        COUNT(*)::int AS count
+      FROM messages
+      WHERE created_at > NOW() - INTERVAL '112 days'
+        AND ($1::text IS NULL OR channel_name = $1)
+      GROUP BY day ORDER BY day
+    `, [channel]);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'heatmap failed' });
   }
 });
