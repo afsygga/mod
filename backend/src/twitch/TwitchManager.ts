@@ -161,6 +161,8 @@ export class TwitchManager {
 
     // !g <game name> — set game/category (only for broadcaster or mods with OAuth)
     if (message.trim().startsWith('!g ') && (userstate.mod || userstate.badges?.broadcaster)) {
+      const cachedForCmd = await this.getCachedSettings();
+      if (!cachedForCmd.setGameEnabled) return;
       const gameName = message.trim().slice(3).trim();
       if (gameName) {
         this.setGame(channelName, gameName, state.primaryEmail).then(reply => {
@@ -565,6 +567,7 @@ export class TwitchManager {
     ignoredRoles: [] as string[],
     autoMode: true,
     defaultMuteDuration: 60,
+    setGameEnabled: false,
     lastFetched: 0,
   };
   private readonly SETTINGS_TTL = 10_000; // ms
@@ -575,7 +578,7 @@ export class TwitchManager {
     }
     try {
       const { rows } = await db.query(
-        "SELECT key, value FROM settings WHERE key IN ('ignored_roles','auto_mode','default_mute_duration')"
+        "SELECT key, value FROM settings WHERE key IN ('ignored_roles','auto_mode','default_mute_duration','set_game_enabled')"
       );
       for (const r of rows) {
         if (r.key === 'ignored_roles') {
@@ -584,6 +587,8 @@ export class TwitchManager {
           this.settingsCache.autoMode = r.value === 'true';
         } else if (r.key === 'default_mute_duration') {
           this.settingsCache.defaultMuteDuration = parseInt(r.value) || 60;
+        } else if (r.key === 'set_game_enabled') {
+          this.settingsCache.setGameEnabled = r.value === 'true';
         }
       }
       this.settingsCache.lastFetched = Date.now();

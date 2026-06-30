@@ -58,4 +58,5 @@ export interface AppSettings {
   auto_mode: boolean;
   default_mute_duration: number;
   ignored_roles?: string[];
+  set_game_enabled: boolean;
 }

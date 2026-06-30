@@ -289,6 +289,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
         link_detection: String(s.link_detection),
         auto_mode: String(s.auto_mode),
         default_mute_duration: String(s.default_mute_duration),
+        set_game_enabled: String(s.set_game_enabled),
         mute_reason: muteReason,
       });
       localStorage.setItem('mute_reason', muteReason);
@@ -419,6 +420,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
               subtitle={lang === 'ru' ? 'Управление автоматическими действиями' : 'Control automatic actions'}>
               <ToggleRow label={t.autoMode} desc={t.autoModeDesc} checked={s.auto_mode} onChange={getUpdater('auto_mode')} />
               <ToggleRow label={t.linkDetection} desc={t.linkDetectionDesc} checked={s.link_detection} onChange={getUpdater('link_detection')} />
+              <ToggleRow label={lang === 'ru' ? 'Команда !g' : '!g command'} desc={lang === 'ru' ? 'Позволяет модераторам менять категорию канала через !g <игра>' : 'Allows mods to change channel category via !g <game>'} checked={s.set_game_enabled} onChange={getUpdater('set_game_enabled')} />
             </Section>
           </div>
 

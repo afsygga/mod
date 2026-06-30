@@ -33,7 +33,7 @@ const ROLE_OPTIONS = [
 const DEFAULT_SETTINGS: AppSettings = {
   detect_threshold: 70, auto_mute_threshold: 90, similarity_threshold: 75,
   burst_limit: 6, mem_window_seconds: 120, link_detection: true,
-  auto_mode: true, default_mute_duration: 600,
+  auto_mode: true, default_mute_duration: 600, set_game_enabled: false,
 };
 
 export default function App() {
@@ -91,6 +91,7 @@ export default function App() {
         link_detection: raw.link_detection === 'true',
         auto_mode: raw.auto_mode === 'true',
         default_mute_duration: parseInt(raw.default_mute_duration ?? '600'),
+        set_game_enabled: raw.set_game_enabled === 'true',
       };
       setSettings(parsed);
       setAutoMode(parsed.auto_mode);
