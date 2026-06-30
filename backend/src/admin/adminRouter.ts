@@ -217,14 +217,23 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
 
     if (!broadcasterId) return res.status(404).json({ error: 'broadcaster not found' });
 
-    // 2. Fetch moderator list from Helix (paginated, up to 500)
-    const headers = await tm.getHelixHeadersPublic(ownerEmail);
+    // 2. Fetch moderator list from Helix using stored OAuth token
+    const { rows: userRows } = await db.query(
+      'SELECT twitch_oauth FROM users WHERE email=$1', [ownerEmail]
+    );
+    const rawOauth: string = userRows[0]?.twitch_oauth || '';
+    const accessToken = rawOauth.startsWith('oauth:') ? rawOauth.slice(6) : rawOauth;
+    const clientId = process.env.TWITCH_CLIENT_ID || '';
+    const oauthHeaders: Record<string, string> = accessToken
+      ? { 'Client-Id': clientId, 'Authorization': `Bearer ${accessToken}` }
+      : await tm.getHelixHeadersPublic(ownerEmail);
+
     let mods: any[] = [];
     let cursor: string | null = null;
     let helixError: string | null = null;
     do {
       const url = `https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=${broadcasterId}&first=100${cursor ? `&after=${cursor}` : ''}`;
-      const r = await fetch(url, { headers });
+      const r = await fetch(url, { headers: oauthHeaders });
       if (!r.ok) {
         const errBody: any = await r.json().catch(() => ({}));
         helixError = `Twitch API ${r.status}: ${errBody?.message || r.statusText}`;
@@ -236,7 +245,7 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
     } while (cursor);
 
     if (helixError && mods.length === 0) {
-      return res.status(403).json({ error: helixError, hint: 'Токен не имеет scope channel:read:moderators. Переподключи Twitch аккаунт.' });
+      return res.status(403).json({ error: helixError, hint: 'Переподключи Twitch аккаунт через OAuth.' });
     }
 
     // 3. Fetch Twitch avatars for all mods (from cache, then Helix for missing ones)
