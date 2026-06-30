@@ -221,7 +221,11 @@ const InputRow = React.memo(function InputRow({ label, desc, value, onChange, pl
 
 const Section = React.memo(function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <div className="glass-card" style={{ padding: '20px 24px', marginBottom: '14px' }}>
+    <div style={{
+      padding: '20px 24px', marginBottom: '14px',
+      background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)',
+      borderRadius: '16px',
+    }}>
       <div style={{ marginBottom: '6px', paddingBottom: '14px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <h3 style={{ fontSize: '14px', fontWeight: 600, color: 'rgba(255,255,255,0.92)', letterSpacing: '-0.005em' }}>{title}</h3>
         {subtitle && <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '3px' }}>{subtitle}</p>}
