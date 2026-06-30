@@ -263,7 +263,7 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
       for (let i = 0; i < missing.length; i += 100) {
         const batch = missing.slice(i, i + 100);
         const q = batch.map(l => `login=${l}`).join('&');
-        const hr = await fetch(`https://api.twitch.tv/helix/users?${q}`, { headers });
+        const hr = await fetch(`https://api.twitch.tv/helix/users?${q}`, { headers: oauthHeaders });
         if (hr.ok) {
           const hd: any = await hr.json();
           for (const u of (hd.data || [])) {
