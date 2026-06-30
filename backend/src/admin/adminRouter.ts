@@ -1,10 +1,25 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
 import { authenticate, requireAdmin } from '../auth/authMiddleware';
+import { getOnlineUsers } from '../websocket/wsHandler';
 
 export const adminRouter = Router();
 
 adminRouter.use(authenticate, requireAdmin);
+
+// ============================================================================
+// ONLINE USERS
+// ============================================================================
+adminRouter.get('/online', async (_req: Request, res: Response) => {
+  const online = getOnlineUsers();
+  // De-dupe by email (same user can have multiple tabs open)
+  const byEmail = new Map<string, typeof online[0]>();
+  for (const u of online) {
+    const existing = byEmail.get(u.email);
+    if (!existing || u.connectedAt < existing.connectedAt) byEmail.set(u.email, u);
+  }
+  res.json({ count: byEmail.size, users: [...byEmail.values()] });
+});
 
 // ============================================================================
 // USERS

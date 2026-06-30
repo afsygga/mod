@@ -6,6 +6,7 @@ export function useWebSocket(onMessage: Handler) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
   const handlerRef = useRef(onMessage);
+  const identifyRef = useRef<object | null>(null);
   handlerRef.current = onMessage;
 
   const connect = useCallback(() => {
@@ -13,7 +14,10 @@ export function useWebSocket(onMessage: Handler) {
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => console.log('[WS] connected');
+    ws.onopen = () => {
+      console.log('[WS] connected');
+      if (identifyRef.current) ws.send(JSON.stringify(identifyRef.current));
+    };
     ws.onmessage = (e) => {
       try { handlerRef.current(JSON.parse(e.data)); } catch {}
     };
@@ -38,5 +42,12 @@ export function useWebSocket(onMessage: Handler) {
     }
   }, []);
 
-  return { send };
+  const setIdentify = useCallback((data: object | null) => {
+    identifyRef.current = data;
+    if (data && wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+    }
+  }, []);
+
+  return { send, setIdentify };
 }

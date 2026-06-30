@@ -90,13 +90,21 @@ function Overview() {
   const [timeline, setTimeline] = useState<any[]>([]);
   const [period, setPeriod] = useState<7 | 14 | 30>(14);
   const [hoveredBar, setHoveredBar] = useState<number | null>(null);
+  const [online, setOnline] = useState<{ count: number; users: any[] }>({ count: 0, users: [] });
 
   const load = () => {
     api.get('/api/admin/stats').then(setStats).catch(console.error);
     api.get<any[]>('/api/admin/stats/timeline').then(setTimeline).catch(console.error);
+    api.get<{ count: number; users: any[] }>('/api/admin/online').then(setOnline).catch(console.error);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const interval = setInterval(() => {
+      api.get<{ count: number; users: any[] }>('/api/admin/online').then(setOnline).catch(() => {});
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   if (!stats) return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '40px', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>
@@ -131,7 +139,9 @@ function Overview() {
       </div>
 
       {/* ── KPI row ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '10px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px', marginBottom: '10px' }}>
+        <KpiCard icon={Activity} label="Онлайн на сайте" value={online.count} color="#00e88f"
+          sub={online.count > 0 ? online.users.slice(0, 3).map(u => u.name || u.email.split('@')[0]).join(', ') : 'никого нет'} />
         <KpiCard icon={Users} label="Пользователи" value={stats.users.c}
           sub={`${stats.users.active} активны · ${stats.users.admins} админ`} color="#ffc800" />
         <KpiCard icon={Tv2} label="Каналы" value={stats.channels.c}

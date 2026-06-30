@@ -171,7 +171,11 @@ export default function App() {
     }
   }, []);
 
-  useWebSocket(handleWsMessage);
+  const { setIdentify } = useWebSocket(handleWsMessage);
+
+  useEffect(() => {
+    setIdentify(user ? { type: 'identify', email: user.email, name: user.name, picture: user.picture } : null);
+  }, [user, setIdentify]);
 
   // Detect login transition (null → user) to trigger success animation
   // Only trigger AFTER initial auth check completes (so F5 with existing session doesn't show it)
