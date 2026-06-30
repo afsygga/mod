@@ -391,12 +391,19 @@ adminRouter.post('/streams/sync', async (_req: Request, res: Response) => {
     }
 
     // Close sessions that are no longer live
-    await db.query(`
-      UPDATE stream_sessions SET ended_at = NOW()
-      WHERE ended_at IS NULL
-        AND channel_name = ANY($1)
-        AND (twitch_stream_id IS NULL OR twitch_stream_id NOT IN (${liveStreams.map((_: any, i: number) => `$${i + 2}`).join(',')}))
-    `, [channelNames, ...liveStreams.map((s: any) => s.id)]).catch(() => {});
+    if (liveStreams.length === 0) {
+      await db.query(`
+        UPDATE stream_sessions SET ended_at = NOW()
+        WHERE ended_at IS NULL AND channel_name = ANY($1)
+      `, [channelNames]).catch(() => {});
+    } else {
+      await db.query(`
+        UPDATE stream_sessions SET ended_at = NOW()
+        WHERE ended_at IS NULL
+          AND channel_name = ANY($1)
+          AND (twitch_stream_id IS NULL OR twitch_stream_id NOT IN (${liveStreams.map((_: any, i: number) => `$${i + 2}`).join(',')}))
+      `, [channelNames, ...liveStreams.map((s: any) => s.id)]).catch(() => {});
+    }
 
     res.json({ synced: liveStreams.length });
   } catch (err: any) {
