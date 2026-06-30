@@ -97,6 +97,7 @@ async function runMigrations() {
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS twitch_oauth TEXT`);
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(32)`);
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_enabled BOOLEAN DEFAULT true`);
+    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mute_reason TEXT`);
     await db.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS trigger_after_n INTEGER DEFAULT 1`);
     // Channel subscribers (M:N) — many users can be moderators of the same channel
     await db.query(`

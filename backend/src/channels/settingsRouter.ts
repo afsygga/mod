@@ -4,11 +4,16 @@ import { logger } from '../utils/logger';
 
 export const settingsRouter = Router();
 
-settingsRouter.get('/', async (_req: Request, res: Response) => {
+settingsRouter.get('/', async (req: Request, res: Response) => {
   try {
     const { rows } = await db.query('SELECT key, value FROM settings');
     const result: Record<string, string> = {};
     rows.forEach((r: any) => { result[r.key] = r.value; });
+    // mute_reason is personal per-user, not global
+    if (req.user?.email) {
+      const { rows: userRows } = await db.query('SELECT mute_reason FROM users WHERE email=$1', [req.user.email]);
+      result.mute_reason = userRows[0]?.mute_reason || '';
+    }
     res.json(result);
   } catch (err) {
     logger.error('GET /settings error', err);
@@ -20,6 +25,13 @@ settingsRouter.put('/', async (req: Request, res: Response) => {
   const updates = req.body as Record<string, string>;
   try {
     for (const [key, value] of Object.entries(updates)) {
+      if (key === 'mute_reason') {
+        // Personal per-user setting — never written to the shared settings table
+        if (req.user?.email) {
+          await db.query('UPDATE users SET mute_reason=$1 WHERE email=$2', [String(value), req.user.email]);
+        }
+        continue;
+      }
       await db.query(
         'INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=NOW()',
         [key, String(value)]

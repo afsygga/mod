@@ -661,8 +661,8 @@ export class TwitchManager {
       reason = customReason;
     } else if (!skipReason) {
       try {
-        const { rows } = await db.query("SELECT value FROM settings WHERE key='mute_reason'");
-        if (rows.length > 0 && rows[0].value && rows[0].value.trim()) reason = rows[0].value.trim();
+        const { rows } = await db.query('SELECT mute_reason FROM users WHERE email=$1', [performedBy]);
+        if (rows.length > 0 && rows[0].mute_reason && rows[0].mute_reason.trim()) reason = rows[0].mute_reason.trim();
       } catch {}
     }
 
@@ -735,8 +735,8 @@ export class TwitchManager {
       reason = customReason;
     } else if (!skipReason) {
       try {
-        const { rows } = await db.query("SELECT value FROM settings WHERE key='mute_reason'");
-        if (rows.length > 0 && rows[0].value && rows[0].value.trim()) reason = rows[0].value.trim();
+        const { rows } = await db.query('SELECT mute_reason FROM users WHERE email=$1', [performedBy]);
+        if (rows.length > 0 && rows[0].mute_reason && rows[0].mute_reason.trim()) reason = rows[0].mute_reason.trim();
       } catch {}
     }
 
