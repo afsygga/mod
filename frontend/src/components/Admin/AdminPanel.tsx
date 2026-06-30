@@ -329,7 +329,11 @@ function Overview() {
 
 function KpiCard({ icon: Icon, label, value, sub, color }: { icon: any; label: string; value: any; sub?: string; color?: string }) {
   return (
-    <div className="glass-card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+    <div style={{
+      padding: '14px 18px', display: 'flex', alignItems: 'flex-start', gap: '12px',
+      background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)',
+      borderRadius: '16px',
+    }}>
       <div style={{
         width: '32px', height: '32px', borderRadius: '9px', flexShrink: 0,
         background: color ? `${color}14` : 'rgba(255,255,255,0.05)',
