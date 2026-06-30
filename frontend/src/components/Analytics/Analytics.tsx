@@ -947,13 +947,13 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────
-export function Analytics() {
+export function Analytics({ initialSection }: { initialSection?: 'mods' | 'streams' } = {}) {
   const [channels, setChannels] = useState<string[]>([]);
   const [selectedChannel, setSelectedChannel] = useState('');
   const [mods, setMods] = useState<TwitchMod[]>([]);
   const [streams, setStreams] = useState<StreamSession[]>([]);
   const [selectedStream, setSelectedStream] = useState<number | null>(null);
-  const [section, setSection] = useState<'mods' | 'streams'>('mods');
+  const [section, setSection] = useState<'mods' | 'streams'>(initialSection || 'mods');
   const [modsLoading, setModsLoading] = useState(false);
   const [modsError, setModsError] = useState<string | null>(null);
   const [init, setInit] = useState(false);
@@ -1217,12 +1217,6 @@ export function Analytics() {
               })}
             </div>
 
-            {/* Fallback notice */}
-            {modsError && mods.length > 0 && (
-              <div style={{ marginTop: '10px', padding: '8px 14px', borderRadius: '8px', background: 'rgba(255,200,0,0.06)', border: '1px solid rgba(255,200,0,0.12)', fontSize: '11px', color: 'rgba(255,200,0,0.6)' }}>
-                {modsError}
-              </div>
-            )}
 
             {/* Legend */}
             {mods.length > 0 && (

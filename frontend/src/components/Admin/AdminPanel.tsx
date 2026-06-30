@@ -157,46 +157,6 @@ function Overview() {
     ? ((stats.actions.reduce((s: number, a: any) => s + a.c, 0) / stats.total_messages) * 100).toFixed(2)
     : '0';
 
-  // SVG area chart helpers
-  const SVG_W = 800;
-  const SVG_H = 200;
-  const PAD_L = 44;
-  const PAD_R = 12;
-  const PAD_T = 12;
-  const PAD_B = 28;
-  const chartW = SVG_W - PAD_L - PAD_R;
-  const chartH = SVG_H - PAD_T - PAD_B;
-
-  function smoothPath(points: [number, number][]): string {
-    if (points.length < 2) return '';
-    let d = `M ${points[0][0]} ${points[0][1]}`;
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const curr = points[i];
-      const cpx = (prev[0] + curr[0]) / 2;
-      d += ` C ${cpx} ${prev[1]}, ${cpx} ${curr[1]}, ${curr[0]} ${curr[1]}`;
-    }
-    return d;
-  }
-
-  const chartPoints: [number, number][] = filteredTimeline.map((t, i) => {
-    const x = PAD_L + (filteredTimeline.length < 2 ? chartW / 2 : (i / (filteredTimeline.length - 1)) * chartW);
-    const y = PAD_T + chartH - Math.max(2, (t.total / maxBar) * chartH);
-    return [x, y];
-  });
-
-  const spamPoints: [number, number][] = filteredTimeline.map((t, i) => {
-    const x = PAD_L + (filteredTimeline.length < 2 ? chartW / 2 : (i / (filteredTimeline.length - 1)) * chartW);
-    const y = PAD_T + chartH - (t.total > 0 ? (t.spam / maxBar) * chartH : 0);
-    return [x, y];
-  });
-
-  const totalLine = smoothPath(chartPoints);
-  const spamLine = smoothPath(spamPoints);
-  const areaPath = chartPoints.length > 0
-    ? `${totalLine} L ${chartPoints[chartPoints.length - 1][0]} ${PAD_T + chartH} L ${PAD_L} ${PAD_T + chartH} Z`
-    : '';
-
   // Donut chart for auto vs manual
   const autoMutes = live?.auto_vs_manual.auto_mutes ?? 0;
   const manualMutes = live?.auto_vs_manual.manual_mutes ?? 0;
@@ -302,140 +262,286 @@ function Overview() {
         </div>
       )}
 
-      {/* ── Timeline chart (improved with trend line) ── */}
-      <div className="glass-card" style={{ padding: '20px 22px', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <TrendingUp size={14} style={{ color: '#ffc800' }} />
-            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Активность чата</span>
+      {/* ── Timeline chart ── */}
+      {(() => {
+        // Smooth area path for total messages
+        function adminSmoothArea(data: { total: number }[], maxVal: number, W: number, H: number): string {
+          if (data.length < 2) return '';
+          const pts: [number, number][] = data.map((d, i) => [
+            (i / (data.length - 1)) * W,
+            H - (d.total / maxVal) * H * 0.9 - H * 0.05,
+          ]);
+          let path = `M ${pts[0][0]} ${pts[0][1]}`;
+          for (let i = 1; i < pts.length; i++) {
+            const cp = (pts[i - 1][0] + pts[i][0]) / 2;
+            path += ` C ${cp} ${pts[i - 1][1]}, ${cp} ${pts[i][1]}, ${pts[i][0]} ${pts[i][1]}`;
+          }
+          path += ` L ${pts[pts.length - 1][0]} ${H} L ${pts[0][0]} ${H} Z`;
+          return path;
+        }
+
+        function adminSmoothLine(data: { spam: number }[], maxVal: number, W: number, H: number): string {
+          if (data.length < 2) return '';
+          const pts: [number, number][] = data.map((d, i) => [
+            (i / (data.length - 1)) * W,
+            H - (d.spam / maxVal) * H * 0.9 - H * 0.05,
+          ]);
+          let path = `M ${pts[0][0]} ${pts[0][1]}`;
+          for (let i = 1; i < pts.length; i++) {
+            const cp = (pts[i - 1][0] + pts[i][0]) / 2;
+            path += ` C ${cp} ${pts[i - 1][1]}, ${cp} ${pts[i][1]}, ${pts[i][0]} ${pts[i][1]}`;
+          }
+          return path;
+        }
+
+        const CHART_W = 800;
+        const CHART_H = 180;
+        const areaData = filteredTimeline.length >= 2 ? filteredTimeline : [];
+        const areaPath2 = areaData.length >= 2 ? adminSmoothArea(areaData, maxBar, CHART_W, CHART_H) : '';
+        const spamPath2 = areaData.length >= 2 ? adminSmoothLine(areaData, maxBar, CHART_W, CHART_H) : '';
+
+        // Sparkline helper
+        function sparkline(values: number[], color: string): string {
+          if (values.length < 2) return '';
+          const max = Math.max(1, ...values);
+          const W = 60; const H = 30;
+          const pts: [number, number][] = values.map((v, i) => [
+            (i / (values.length - 1)) * W,
+            H - (v / max) * H * 0.85 - H * 0.07,
+          ]);
+          let d = `M ${pts[0][0]} ${pts[0][1]}`;
+          for (let i = 1; i < pts.length; i++) {
+            const cp = (pts[i - 1][0] + pts[i][0]) / 2;
+            d += ` C ${cp} ${pts[i - 1][1]}, ${cp} ${pts[i][1]}, ${pts[i][0]} ${pts[i][1]}`;
+          }
+          return d;
+        }
+
+        const sparkTotals = filteredTimeline.map(t => t.total);
+        const sparkSpam = filteredTimeline.map(t => t.spam);
+
+        // Hover tooltip position
+        const hovIdx = hoveredIdx;
+        let hovX: number | null = null;
+        let hovTotalY: number | null = null;
+        let hovSpamY: number | null = null;
+        if (hovIdx !== null && filteredTimeline.length >= 2) {
+          hovX = (hovIdx / (filteredTimeline.length - 1)) * CHART_W;
+          const t = filteredTimeline[hovIdx];
+          hovTotalY = CHART_H - (t.total / maxBar) * CHART_H * 0.9 - CHART_H * 0.05;
+          hovSpamY = CHART_H - (t.spam / maxBar) * CHART_H * 0.9 - CHART_H * 0.05;
+        }
+
+        const kpiCards = [
+          {
+            label: 'Всего сообщений',
+            value: stats.total_messages.toLocaleString(),
+            spark: sparkTotals,
+            color: '#a070ff',
+          },
+          {
+            label: 'За 24ч',
+            value: stats.messages_24h.toLocaleString(),
+            spark: sparkTotals.slice(-7),
+            color: '#5b9eff',
+          },
+          {
+            label: 'Спам за 24ч',
+            value: stats.mutes_24h.toLocaleString(),
+            spark: sparkSpam,
+            color: '#ff7070',
+          },
+          {
+            label: 'Spam rate',
+            value: `${spamRate}%`,
+            spark: sparkSpam.slice(-7),
+            color: '#ff9800',
+          },
+        ];
+
+        return (
+          <div style={{
+            background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '16px', padding: '20px 22px', marginBottom: '16px',
+          }}>
+            {/* Header row */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <TrendingUp size={14} style={{ color: '#ffc800' }} />
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Активность чата</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {/* Legend */}
+                <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'rgba(180,150,255,0.8)', marginRight: '8px' }}>
+                  <span style={{ width: '12px', height: '12px', borderRadius: '3px', background: '#a070ff', display: 'inline-block' }} />
+                  Все сообщения
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: '#00e5cc', marginRight: '12px' }}>
+                  <span style={{ width: '20px', height: '2px', background: '#00e5cc', display: 'inline-block', borderRadius: '2px' }} />
+                  Спам
+                </span>
+                {/* Period buttons */}
+                {([7, 14, 30] as const).map(p => (
+                  <button key={p} onClick={() => setPeriod(p)} style={{
+                    padding: '4px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', border: 'none',
+                    background: period === p ? 'rgba(255,200,0,0.15)' : 'rgba(255,255,255,0.04)',
+                    color: period === p ? '#ffc800' : 'rgba(255,255,255,0.4)',
+                  }}>{p}д</button>
+                ))}
+              </div>
+            </div>
+
+            {/* KPI mini-cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
+              {kpiCards.map(card => {
+                const sparkPath = sparkline(card.spark, card.color);
+                return (
+                  <div key={card.label} style={{
+                    background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+                    borderRadius: '12px', padding: '14px 16px',
+                    display: 'flex', flexDirection: 'column', gap: '4px',
+                  }}>
+                    <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', fontWeight: 500 }}>{card.label}</div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: card.color, lineHeight: 1 }}>{card.value}</div>
+                    <div style={{ marginTop: '4px' }}>
+                      {card.spark.length >= 2 ? (
+                        <svg width="60" height="30" viewBox="0 0 60 30" style={{ display: 'block', overflow: 'visible' }}>
+                          <path d={sparkPath} fill="none" stroke={card.color} strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+                        </svg>
+                      ) : (
+                        <div style={{ width: '60px', height: '30px' }} />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Main SVG chart */}
+            <div style={{ position: 'relative', width: '100%' }}>
+              <svg
+                viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+                preserveAspectRatio="none"
+                style={{ width: '100%', height: '200px', display: 'block', overflow: 'visible' }}
+                onMouseLeave={() => setHoveredIdx(null)}
+                onMouseMove={(e) => {
+                  const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+                  const mx = (e.clientX - rect.left) / rect.width * CHART_W;
+                  if (filteredTimeline.length < 2) return;
+                  let best = 0;
+                  let bestDist = Infinity;
+                  filteredTimeline.forEach((_t, i) => {
+                    const cx = (i / (filteredTimeline.length - 1)) * CHART_W;
+                    const dist = Math.abs(cx - mx);
+                    if (dist < bestDist) { bestDist = dist; best = i; }
+                  });
+                  setHoveredIdx(best);
+                }}
+              >
+                <defs>
+                  <linearGradient id="adminMsgGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#a070ff" stopOpacity="0.4" />
+                    <stop offset="100%" stopColor="#a070ff" stopOpacity="0.02" />
+                  </linearGradient>
+                  <clipPath id="adminChartClip">
+                    <rect x="0" y="0" width="800" height="180" />
+                  </clipPath>
+                </defs>
+
+                {/* Grid lines + Y labels */}
+                {[0.25, 0.5, 0.75, 1].map(f => {
+                  const y = CHART_H - f * CHART_H * 0.9 - CHART_H * 0.05;
+                  return (
+                    <g key={f}>
+                      <line x1={0} y1={y} x2={CHART_W} y2={y}
+                        stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="4 4" />
+                      <text x={4} y={y - 3} textAnchor="start"
+                        style={{ fontSize: '9px', fill: 'rgba(255,255,255,0.22)', fontFamily: 'Inter,sans-serif' }}>
+                        {Math.round(maxBar * f).toLocaleString()}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Area fill */}
+                {areaPath2 && (
+                  <path d={areaPath2} fill="url(#adminMsgGrad)" clipPath="url(#adminChartClip)" />
+                )}
+
+                {/* Total smooth line */}
+                {areaPath2 && (
+                  <path
+                    d={adminSmoothLine(areaData.map(d => ({ spam: d.total })), maxBar, CHART_W, CHART_H)}
+                    fill="none" stroke="#a070ff" strokeWidth="2" strokeLinecap="round"
+                    clipPath="url(#adminChartClip)"
+                  />
+                )}
+
+                {/* Spam cyan line on top */}
+                {spamPath2 && (
+                  <path d={spamPath2} fill="none" stroke="#00e5cc" strokeWidth="2" strokeLinecap="round"
+                    clipPath="url(#adminChartClip)" />
+                )}
+
+                {/* X-axis date labels */}
+                {filteredTimeline.map((t, i) => {
+                  const step = filteredTimeline.length > 20 ? 4 : filteredTimeline.length > 10 ? 2 : 1;
+                  if (i % step !== 0) return null;
+                  const d = new Date(t.day);
+                  const x = filteredTimeline.length < 2 ? CHART_W / 2 : (i / (filteredTimeline.length - 1)) * CHART_W;
+                  return (
+                    <text key={i} x={x} y={CHART_H - 2} textAnchor="middle"
+                      style={{ fontSize: '9px', fill: 'rgba(255,255,255,0.25)', fontFamily: 'Inter,sans-serif' }}>
+                      {String(d.getDate()).padStart(2, '0')}.{String(d.getMonth() + 1).padStart(2, '0')}
+                    </text>
+                  );
+                })}
+
+                {/* Hover crosshair */}
+                {hovX !== null && hovIdx !== null && (
+                  <>
+                    <line x1={hovX} y1={0} x2={hovX} y2={CHART_H}
+                      stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="3 3" />
+                    {hovTotalY !== null && (
+                      <circle cx={hovX} cy={hovTotalY} r="4" fill="#a070ff" stroke="#fff" strokeWidth="1.5" />
+                    )}
+                    {hovSpamY !== null && (
+                      <circle cx={hovX} cy={hovSpamY} r="3.5" fill="#00e5cc" stroke="#fff" strokeWidth="1.5" />
+                    )}
+                  </>
+                )}
+              </svg>
+
+              {/* HTML tooltip (positioned absolutely) */}
+              {hovX !== null && hovIdx !== null && (() => {
+                const t = filteredTimeline[hovIdx];
+                const d = new Date(t.day);
+                const spamPct = t.total > 0 ? Math.round(t.spam / t.total * 100) : 0;
+                const leftPct = hovX / CHART_W * 100;
+                const alignRight = leftPct > 70;
+                return (
+                  <div style={{
+                    position: 'absolute', top: '4px',
+                    left: alignRight ? undefined : `calc(${leftPct}% + 10px)`,
+                    right: alignRight ? `calc(${100 - leftPct}% + 10px)` : undefined,
+                    pointerEvents: 'none',
+                    background: 'rgba(8,8,14,0.95)', border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '8px', padding: '8px 12px',
+                    fontSize: '11px', lineHeight: '1.6', minWidth: '130px',
+                    zIndex: 10,
+                  }}>
+                    <div style={{ fontWeight: 700, color: '#fff', marginBottom: '4px' }}>
+                      {String(d.getDate()).padStart(2, '0')}.{String(d.getMonth() + 1).padStart(2, '0')}.{d.getFullYear()}
+                    </div>
+                    <div style={{ color: 'rgba(200,180,255,0.9)' }}>Всего: <b>{t.total.toLocaleString()}</b></div>
+                    <div style={{ color: '#00e5cc' }}>Спам: <b>{t.spam.toLocaleString()}</b> ({spamPct}%)</div>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: '4px' }}>
-            {([7, 14, 30] as const).map(p => (
-              <button key={p} onClick={() => setPeriod(p)} style={{
-                padding: '4px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', border: 'none',
-                background: period === p ? 'rgba(255,200,0,0.15)' : 'rgba(255,255,255,0.04)',
-                color: period === p ? '#ffc800' : 'rgba(255,255,255,0.4)',
-              }}>{p}д</button>
-            ))}
-          </div>
-        </div>
-
-        {/* SVG area chart */}
-        <div style={{ position: 'relative', width: '100%' }}>
-          <svg
-            viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-            preserveAspectRatio="none"
-            style={{ width: '100%', height: '200px', display: 'block', overflow: 'visible' }}
-            onMouseLeave={() => setHoveredIdx(null)}
-            onMouseMove={(e) => {
-              const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
-              const mx = (e.clientX - rect.left) / rect.width * SVG_W;
-              if (filteredTimeline.length === 0) return;
-              let best = 0;
-              let bestDist = Infinity;
-              chartPoints.forEach(([cx], i) => {
-                const d = Math.abs(cx - mx);
-                if (d < bestDist) { bestDist = d; best = i; }
-              });
-              setHoveredIdx(best);
-            }}
-          >
-            <defs>
-              <linearGradient id="areaGradPurple" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#a070ff" stopOpacity="0.45" />
-                <stop offset="100%" stopColor="#a070ff" stopOpacity="0.02" />
-              </linearGradient>
-              <clipPath id="chartClip">
-                <rect x={PAD_L} y={PAD_T} width={chartW} height={chartH} />
-              </clipPath>
-            </defs>
-
-            {/* Grid lines + Y labels */}
-            {[0.25, 0.5, 0.75, 1].map(f => {
-              const y = PAD_T + chartH - f * chartH;
-              return (
-                <g key={f}>
-                  <line x1={PAD_L} y1={y} x2={PAD_L + chartW} y2={y}
-                    stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="4 4" />
-                  <text x={PAD_L - 4} y={y + 3} textAnchor="end"
-                    style={{ fontSize: '9px', fill: 'rgba(255,255,255,0.22)', fontFamily: 'Inter,sans-serif' }}>
-                    {Math.round(maxBar * f).toLocaleString()}
-                  </text>
-                </g>
-              );
-            })}
-
-            {/* Area fill */}
-            {areaPath && (
-              <path d={areaPath} fill="url(#areaGradPurple)" clipPath="url(#chartClip)" />
-            )}
-
-            {/* Total messages smooth line */}
-            {totalLine && (
-              <path d={totalLine} fill="none" stroke="#a070ff" strokeWidth="2" strokeLinejoin="round" clipPath="url(#chartClip)" />
-            )}
-
-            {/* Spam smooth line */}
-            {spamLine && (
-              <path d={spamLine} fill="none" stroke="#00e5cc" strokeWidth="1.5" strokeLinejoin="round" clipPath="url(#chartClip)" />
-            )}
-
-            {/* X-axis labels */}
-            {filteredTimeline.map((t, i) => {
-              if (filteredTimeline.length > 14 && i % 2 !== 0) return null;
-              const d = new Date(t.day);
-              const x = chartPoints[i]?.[0] ?? 0;
-              return (
-                <text key={i} x={x} y={SVG_H - 4} textAnchor="middle"
-                  style={{ fontSize: '9px', fill: 'rgba(255,255,255,0.25)', fontFamily: 'Inter,sans-serif' }}>
-                  {d.getDate()}.{d.getMonth() + 1}
-                </text>
-              );
-            })}
-
-            {/* Hover crosshair */}
-            {hoveredIdx !== null && chartPoints[hoveredIdx] && (() => {
-              const [cx] = chartPoints[hoveredIdx];
-              const t = filteredTimeline[hoveredIdx];
-              const d = new Date(t.day);
-              const spamPct = t.total > 0 ? Math.round(t.spam / t.total * 100) : 0;
-              const ttX = cx > SVG_W * 0.7 ? cx - 120 : cx + 8;
-              const ttY = PAD_T;
-              return (
-                <>
-                  <line x1={cx} y1={PAD_T} x2={cx} y2={PAD_T + chartH}
-                    stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="3 3" />
-                  <circle cx={cx} cy={chartPoints[hoveredIdx][1]} r="4" fill="#a070ff" stroke="#fff" strokeWidth="1.5" />
-                  <circle cx={cx} cy={spamPoints[hoveredIdx][1]} r="3" fill="#00e5cc" stroke="#fff" strokeWidth="1.5" />
-                  {/* Tooltip box */}
-                  <rect x={ttX} y={ttY} width="112" height="58" rx="6" ry="6"
-                    fill="rgba(8,8,14,0.95)" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
-                  <text x={ttX + 8} y={ttY + 14} style={{ fontSize: '10px', fill: '#fff', fontWeight: 700, fontFamily: 'Inter,sans-serif' }}>
-                    {d.getDate()}.{d.getMonth() + 1}.{d.getFullYear()}
-                  </text>
-                  <text x={ttX + 8} y={ttY + 28} style={{ fontSize: '9px', fill: 'rgba(200,180,255,0.9)', fontFamily: 'Inter,sans-serif' }}>
-                    Всего: {t.total.toLocaleString()}
-                  </text>
-                  <text x={ttX + 8} y={ttY + 42} style={{ fontSize: '9px', fill: '#00e5cc', fontFamily: 'Inter,sans-serif' }}>
-                    Спам: {t.spam.toLocaleString()} ({spamPct}%)
-                  </text>
-                </>
-              );
-            })()}
-          </svg>
-        </div>
-
-        <div style={{ display: 'flex', gap: '16px', fontSize: '10px', marginTop: '4px' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'rgba(180,150,255,0.8)' }}>
-            <span style={{ width: '24px', height: '2px', background: '#a070ff', display: 'inline-block', borderRadius: '2px' }} />
-            Все сообщения
-          </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#00e5cc' }}>
-            <span style={{ width: '24px', height: '2px', background: '#00e5cc', display: 'inline-block', borderRadius: '2px' }} />
-            Спам
-          </span>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* ── Actions breakdown (60%) + Auto vs Manual donut (40%) ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: '12px', marginBottom: '12px' }}>

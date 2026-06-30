@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutDashboard, ScrollText, Settings as SettingsIcon, Globe, Crown, Star, Gem, Shield, LogOut, ShieldCheck, Twitch, Menu, X, BarChart2 } from 'lucide-react';
+import { LayoutDashboard, ScrollText, Settings as SettingsIcon, Globe, Crown, Star, Gem, Shield, LogOut, ShieldCheck, Twitch, Menu, X, BarChart2, Radio } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
 import { Channel, ChatMessage, QueueItem, AppSettings } from './types';
 import { ChannelManager } from './components/ChannelManager/ChannelManager';
@@ -21,7 +21,7 @@ import { getUserColor } from './utils/colors';
 import { playNotification } from './utils/sound';
 import { T, Lang } from './utils/i18n';
 
-type Tab = 'dashboard' | 'logs' | 'settings' | 'admin' | 'analytics';
+type Tab = 'dashboard' | 'logs' | 'settings' | 'admin' | 'analytics' | 'streams';
 
 const ROLE_OPTIONS = [
   { id: 'Broadcaster', icon: Crown, color: '#f04747' },
@@ -353,6 +353,7 @@ export default function App() {
             ['settings', t.settings, SettingsIcon],
             ...(user.role === 'admin' ? [
               ['analytics', 'Аналитика', BarChart2] as const,
+              ['streams', 'Стримы', Radio] as const,
               ['admin', 'Admin', ShieldCheck] as const,
             ] : []),
           ] as const).map(([id, label, Icon]) => (
@@ -721,7 +722,13 @@ export default function App() {
 
       {tab === 'analytics' && user.role === 'admin' && (
         <div style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
-          <Analytics />
+          <Analytics initialSection="mods" />
+        </div>
+      )}
+
+      {tab === 'streams' && user.role === 'admin' && (
+        <div style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
+          <Analytics initialSection="streams" />
         </div>
       )}
 
