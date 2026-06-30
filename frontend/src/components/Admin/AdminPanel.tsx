@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users, Mail, Tv2, Activity, BarChart3, Trash2, Shield, ShieldOff,
   UserPlus, Search, Crown, X, Plus, TrendingUp, MessageSquare, Zap,
-  VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown,
+  VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown, Circle, Clock, Wifi,
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
@@ -85,24 +85,60 @@ const ACTION_META: Record<string, { color: string; bg: string; icon: any; label:
   UNBANNED:   { color: '#00c878', bg: 'rgba(0,200,120,0.1)',    icon: RotateCcw,  label: 'Разбан' },
 };
 
+interface LiveStats {
+  msg_per_5min: number;
+  recent_actions: Array<{
+    action: string;
+    performed_by: string;
+    channel_name: string;
+    target_username: string | null;
+    created_at: string;
+  }>;
+  channel_status: Array<{ name: string; status: string }>;
+  auto_vs_manual: { auto_mutes: number; manual_mutes: number };
+}
+
+interface ChannelActivity {
+  channel_name: string;
+  total_msgs: number;
+  spam_msgs: number;
+  msgs_24h: number;
+}
+
+function relativeTime(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60) return `${diff}с назад`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}м назад`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}ч назад`;
+  return `${Math.floor(diff / 86400)}д назад`;
+}
+
 function Overview() {
   const [stats, setStats] = useState<any>(null);
   const [timeline, setTimeline] = useState<any[]>([]);
   const [period, setPeriod] = useState<7 | 14 | 30>(14);
   const [hoveredBar, setHoveredBar] = useState<number | null>(null);
   const [online, setOnline] = useState<{ count: number; users: any[] }>({ count: 0, users: [] });
+  const [live, setLive] = useState<LiveStats | null>(null);
+  const [channelActivity, setChannelActivity] = useState<ChannelActivity[]>([]);
+  const [onlineExpanded, setOnlineExpanded] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const loadLive = () => {
+    api.get<LiveStats>('/api/admin/stats/live').then(d => { setLive(d); setLastUpdated(new Date()); }).catch(() => {});
+    api.get<ChannelActivity[]>('/api/admin/stats/channels-activity').then(setChannelActivity).catch(() => {});
+    api.get<{ count: number; users: any[] }>('/api/admin/online').then(setOnline).catch(() => {});
+  };
 
   const load = () => {
     api.get('/api/admin/stats').then(setStats).catch(console.error);
     api.get<any[]>('/api/admin/stats/timeline').then(setTimeline).catch(console.error);
-    api.get<{ count: number; users: any[] }>('/api/admin/online').then(setOnline).catch(console.error);
+    loadLive();
   };
 
   useEffect(() => {
     load();
-    const interval = setInterval(() => {
-      api.get<{ count: number; users: any[] }>('/api/admin/online').then(setOnline).catch(() => {});
-    }, 15000);
+    const interval = setInterval(loadLive, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -121,9 +157,30 @@ function Overview() {
     ? ((stats.actions.reduce((s: number, a: any) => s + a.c, 0) / stats.total_messages) * 100).toFixed(2)
     : '0';
 
+  // Trend line points for timeline chart
+  const CHART_H = 106;
+  const trendPoints = filteredTimeline.length > 1
+    ? filteredTimeline.map((t, i) => {
+        const x = (i / (filteredTimeline.length - 1)) * 100;
+        const y = CHART_H - Math.max(2, (t.total / maxBar) * CHART_H);
+        return `${x},${y}`;
+      }).join(' ')
+    : '';
+
+  // Donut chart for auto vs manual
+  const autoMutes = live?.auto_vs_manual.auto_mutes ?? 0;
+  const manualMutes = live?.auto_vs_manual.manual_mutes ?? 0;
+  const donutTotal = autoMutes + manualMutes;
+  const autoPct = donutTotal > 0 ? autoMutes / donutTotal : 0.5;
+  const DONUT_R = 36;
+  const DONUT_CIRC = 2 * Math.PI * DONUT_R;
+  const autoArc = autoPct * DONUT_CIRC;
+
+  const maxActivity = Math.max(1, ...channelActivity.map(c => c.total_msgs));
+
   return (
-    <div style={{ maxWidth: '900px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '24px' }}>
+    <div style={{ maxWidth: '1100px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '16px' }}>
         <div>
           <h2 style={{ fontSize: '20px', fontWeight: 700, color: 'rgba(255,255,255,0.95)', marginBottom: '2px' }}>Обзор системы</h2>
           <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>Аналитика всех каналов в реальном времени</p>
@@ -138,10 +195,35 @@ function Overview() {
         </button>
       </div>
 
-      {/* ── KPI row ── */}
+      {/* ── Live stats bar ── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '20px',
+        padding: '8px 16px', marginBottom: '14px', borderRadius: '10px',
+        background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)',
+        fontSize: '12px',
+      }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#00c878' }}>
+          <Circle size={8} fill="#00c878" />
+          <b>{live?.msg_per_5min ?? '—'}</b>
+          <span style={{ color: 'rgba(255,255,255,0.4)' }}>сообщ/5мин</span>
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'rgba(255,255,255,0.4)' }}>
+          <Clock size={11} />
+          Обновлено: {lastUpdated ? lastUpdated.toLocaleTimeString() : '—'}
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'rgba(255,255,255,0.4)' }}>
+          <Wifi size={11} />
+          {online.count} онлайн
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'rgba(255,255,255,0.2)' }}>
+          обновление каждые 15с
+        </span>
+      </div>
+
+      {/* ── KPI row (5 columns) ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px', marginBottom: '10px' }}>
         <KpiCard icon={Activity} label="Онлайн на сайте" value={online.count} color="#00e88f"
-          sub={online.count > 0 ? online.users.slice(0, 3).map(u => u.name || u.email.split('@')[0]).join(', ') : 'никого нет'} />
+          sub={online.count > 0 ? online.users.slice(0, 3).map((u: any) => u.name || u.email.split('@')[0]).join(', ') : 'никого нет'} />
         <KpiCard icon={Users} label="Пользователи" value={stats.users.c}
           sub={`${stats.users.active} активны · ${stats.users.admins} админ`} color="#ffc800" />
         <KpiCard icon={Tv2} label="Каналы" value={stats.channels.c}
@@ -151,13 +233,46 @@ function Overview() {
         <KpiCard icon={AlertTriangle} label="Spam rate" value={`${spamRate}%`} color="#ff9800"
           sub={`${stats.total_messages.toLocaleString()} сообщений`} />
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
         <KpiCard icon={MessageSquare} label="Сообщений за 24ч" value={stats.messages_24h.toLocaleString()} color="#5b9eff" />
         <KpiCard icon={Ban} label="Банов всего" value={totalBans.toLocaleString()} color="#ff5959" />
         <KpiCard icon={Mail} label="В whitelist" value={stats.whitelist_count} color="#00c878" />
       </div>
 
-      {/* ── Timeline chart ── */}
+      {/* ── Online users panel (collapsible) ── */}
+      {online.users.length > 0 && (
+        <div style={{
+          marginBottom: '16px', borderRadius: '14px',
+          background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)',
+        }}>
+          <button onClick={() => setOnlineExpanded(v => !v)} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+            padding: '10px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.7)',
+          }}>
+            <Activity size={13} style={{ color: '#00e88f' }} />
+            <span style={{ fontSize: '12px', fontWeight: 600 }}>Сейчас на сайте ({online.count})</span>
+            <ChevronDown size={12} style={{ marginLeft: 'auto', transform: onlineExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+          </button>
+          {onlineExpanded && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '0 16px 14px' }}>
+              {online.users.map((u: any, i: number) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 10px', borderRadius: '8px', background: 'rgba(0,232,143,0.06)', border: '1px solid rgba(0,232,143,0.12)' }}>
+                  {u.picture ? (
+                    <img src={u.picture} alt="" style={{ width: '22px', height: '22px', borderRadius: '50%' }} />
+                  ) : (
+                    <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(0,232,143,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, color: '#00e88f' }}>
+                      {(u.name || u.email || '?')[0].toUpperCase()}
+                    </div>
+                  )}
+                  <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{u.name || u.email?.split('@')[0]}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Timeline chart (improved with trend line) ── */}
       <div className="glass-card" style={{ padding: '20px 22px', marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -175,58 +290,80 @@ function Overview() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '130px', paddingBottom: '24px', position: 'relative' }}>
-          {/* Y-axis guide lines */}
-          {[0.25, 0.5, 0.75, 1].map(f => (
-            <div key={f} style={{
-              position: 'absolute', left: 0, right: 0, bottom: `calc(24px + ${f * 106}px)`,
-              borderTop: '1px solid rgba(255,255,255,0.04)',
-              fontSize: '8px', color: 'rgba(255,255,255,0.18)',
-              paddingLeft: '2px', lineHeight: '1',
-            }}>
-              {Math.round(maxBar * f).toLocaleString()}
-            </div>
-          ))}
+        <div style={{ position: 'relative', height: '154px' }}>
+          {/* SVG trend overlay */}
+          {filteredTimeline.length > 1 && (
+            <svg style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: `${CHART_H}px`, pointerEvents: 'none', overflow: 'visible' }}
+              preserveAspectRatio="none" viewBox={`0 0 100 ${CHART_H}`}>
+              <defs>
+                <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#ffc800" stopOpacity="0.18" />
+                  <stop offset="100%" stopColor="#ffc800" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              {/* Gradient fill area */}
+              <polyline
+                points={`0,${CHART_H} ${trendPoints} 100,${CHART_H}`}
+                fill="url(#trendGrad)" stroke="none" />
+              {/* Trend line */}
+              <polyline
+                points={trendPoints}
+                fill="none" stroke="#ffc800" strokeWidth="0.8" strokeOpacity="0.6"
+                strokeLinejoin="round" strokeLinecap="round" />
+            </svg>
+          )}
 
-          {filteredTimeline.map((t, i) => {
-            const totalH = Math.max(2, (t.total / maxBar) * 106);
-            const spamH = t.total > 0 ? (t.spam / t.total) * totalH : 0;
-            const isHovered = hoveredBar === i;
-            const d = new Date(t.day);
-            return (
-              <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', position: 'relative' }}
-                onMouseEnter={() => setHoveredBar(i)} onMouseLeave={() => setHoveredBar(null)}>
-                {/* Tooltip */}
-                {isHovered && (
-                  <div style={{
-                    position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
-                    background: 'rgba(8,8,12,0.95)', border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '8px', padding: '6px 10px', fontSize: '10px', whiteSpace: 'nowrap', zIndex: 10,
-                    marginBottom: '4px', pointerEvents: 'none',
-                  }}>
-                    <div style={{ fontWeight: 700, color: '#fff', marginBottom: '2px' }}>
-                      {d.getDate()}.{d.getMonth() + 1}.{d.getFullYear()}
-                    </div>
-                    <div style={{ color: 'rgba(255,255,255,0.6)' }}>Сообщений: <b style={{ color: '#fff' }}>{t.total.toLocaleString()}</b></div>
-                    <div style={{ color: 'rgba(255,89,89,0.9)' }}>Спам: <b>{t.spam.toLocaleString()}</b> ({t.total > 0 ? Math.round(t.spam / t.total * 100) : 0}%)</div>
-                  </div>
-                )}
-                {/* Bar */}
-                <div style={{ width: '100%', height: `${totalH}px`, borderRadius: '4px 4px 0 0', overflow: 'hidden', position: 'relative',
-                  background: isHovered ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.1)',
-                  transition: 'background 0.15s',
-                }}>
-                  <div style={{
-                    position: 'absolute', bottom: 0, left: 0, right: 0, height: `${spamH}px`,
-                    background: 'linear-gradient(to top, rgba(255,89,89,0.85), rgba(255,152,0,0.6))',
-                  }} />
-                </div>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.28)', marginTop: '5px', textAlign: 'center' }}>
-                  {d.getDate()}.{d.getMonth() + 1}
-                </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '130px', paddingBottom: '24px', position: 'relative' }}>
+            {/* Y-axis guide lines */}
+            {[0.25, 0.5, 0.75, 1].map(f => (
+              <div key={f} style={{
+                position: 'absolute', left: 0, right: 0, bottom: `calc(24px + ${f * CHART_H}px)`,
+                borderTop: '1px solid rgba(255,255,255,0.04)',
+                fontSize: '8px', color: 'rgba(255,255,255,0.18)',
+                paddingLeft: '2px', lineHeight: '1',
+              }}>
+                {Math.round(maxBar * f).toLocaleString()}
               </div>
-            );
-          })}
+            ))}
+
+            {filteredTimeline.map((t, i) => {
+              const totalH = Math.max(2, (t.total / maxBar) * CHART_H);
+              const spamH = t.total > 0 ? (t.spam / t.total) * totalH : 0;
+              const isHovered = hoveredBar === i;
+              const d = new Date(t.day);
+              return (
+                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', position: 'relative' }}
+                  onMouseEnter={() => setHoveredBar(i)} onMouseLeave={() => setHoveredBar(null)}>
+                  {isHovered && (
+                    <div style={{
+                      position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+                      background: 'rgba(8,8,12,0.95)', border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '8px', padding: '6px 10px', fontSize: '10px', whiteSpace: 'nowrap', zIndex: 10,
+                      marginBottom: '4px', pointerEvents: 'none',
+                    }}>
+                      <div style={{ fontWeight: 700, color: '#fff', marginBottom: '2px' }}>
+                        {d.getDate()}.{d.getMonth() + 1}.{d.getFullYear()}
+                      </div>
+                      <div style={{ color: 'rgba(255,255,255,0.6)' }}>Сообщений: <b style={{ color: '#fff' }}>{t.total.toLocaleString()}</b></div>
+                      <div style={{ color: 'rgba(255,89,89,0.9)' }}>Спам: <b>{t.spam.toLocaleString()}</b> ({t.total > 0 ? Math.round(t.spam / t.total * 100) : 0}%)</div>
+                    </div>
+                  )}
+                  <div style={{ width: '100%', height: `${totalH}px`, borderRadius: '4px 4px 0 0', overflow: 'hidden', position: 'relative',
+                    background: isHovered ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.1)',
+                    transition: 'background 0.15s',
+                  }}>
+                    <div style={{
+                      position: 'absolute', bottom: 0, left: 0, right: 0, height: `${spamH}px`,
+                      background: 'linear-gradient(to top, rgba(255,89,89,0.85), rgba(255,152,0,0.6))',
+                    }} />
+                  </div>
+                  <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.28)', marginTop: '5px', textAlign: 'center' }}>
+                    {d.getDate()}.{d.getMonth() + 1}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: '16px', fontSize: '10px', marginTop: '4px' }}>
@@ -238,45 +375,137 @@ function Overview() {
             <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'rgba(255,89,89,0.7)', display: 'inline-block' }} />
             Спам
           </span>
-        </div>
-      </div>
-
-      {/* ── Actions breakdown ── */}
-      <div className="glass-card" style={{ padding: '18px 22px', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-          <Shield size={14} style={{ color: '#a070ff' }} />
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Действия модерации</span>
-          <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-            всего {stats.total_logs.toLocaleString()}
+          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'rgba(255,200,0,0.6)' }}>
+            <span style={{ width: '24px', height: '2px', background: '#ffc800', display: 'inline-block', borderRadius: '2px', opacity: 0.7 }} />
+            Тренд
           </span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-          {stats.actions.map((a: any) => {
-            const meta = ACTION_META[a.action] || { color: '#fff', bg: 'rgba(255,255,255,0.05)', icon: Activity, label: a.action };
-            const Icon = meta.icon;
-            const pct = stats.total_logs > 0 ? Math.round(a.c / stats.total_logs * 100) : 0;
-            return (
-              <div key={a.action} style={{
-                padding: '14px 16px', borderRadius: '12px',
-                background: meta.bg, border: `1px solid ${meta.color}22`,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '8px' }}>
-                  <Icon size={13} style={{ color: meta.color }} />
-                  <span style={{ fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{meta.label}</span>
+      </div>
+
+      {/* ── Actions breakdown (60%) + Auto vs Manual donut (40%) ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: '12px', marginBottom: '12px' }}>
+        <div className="glass-card" style={{ padding: '18px 22px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <Shield size={14} style={{ color: '#a070ff' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Действия модерации</span>
+            <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+              всего {stats.total_logs.toLocaleString()}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+            {stats.actions.map((a: any) => {
+              const meta = ACTION_META[a.action] || { color: '#fff', bg: 'rgba(255,255,255,0.05)', icon: Activity, label: a.action };
+              const Icon = meta.icon;
+              const pct = stats.total_logs > 0 ? Math.round(a.c / stats.total_logs * 100) : 0;
+              return (
+                <div key={a.action} style={{
+                  padding: '14px 16px', borderRadius: '12px',
+                  background: meta.bg, border: `1px solid ${meta.color}22`,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '8px' }}>
+                    <Icon size={13} style={{ color: meta.color }} />
+                    <span style={{ fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{meta.label}</span>
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: meta.color, lineHeight: 1, marginBottom: '4px' }}>{a.c.toLocaleString()}</div>
+                  <div style={{ height: '3px', borderRadius: '3px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                    <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: 'easeOut' }}
+                      style={{ height: '100%', background: meta.color, borderRadius: '3px' }} />
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>{pct}% от всех</div>
                 </div>
-                <div style={{ fontSize: '24px', fontWeight: 800, color: meta.color, lineHeight: 1, marginBottom: '4px' }}>{a.c.toLocaleString()}</div>
-                <div style={{ height: '3px', borderRadius: '3px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
-                  <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, ease: 'easeOut' }}
-                    style={{ height: '100%', background: meta.color, borderRadius: '3px' }} />
-                </div>
-                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>{pct}% от всех</div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Auto vs Manual donut */}
+        <div className="glass-card" style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', alignSelf: 'flex-start' }}>
+            <Zap size={14} style={{ color: '#ff9800' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Авто vs Ручные</span>
+            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginLeft: 'auto' }}>7 дней</span>
+          </div>
+          <svg width="110" height="110" viewBox="0 0 110 110">
+            <circle cx="55" cy="55" r={DONUT_R} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="12" />
+            <circle cx="55" cy="55" r={DONUT_R} fill="none" stroke="#ff9800" strokeWidth="12"
+              strokeDasharray={`${autoArc} ${DONUT_CIRC - autoArc}`}
+              strokeDashoffset={DONUT_CIRC * 0.25}
+              strokeLinecap="round" />
+            <circle cx="55" cy="55" r={DONUT_R} fill="none" stroke="#ffc800" strokeWidth="12"
+              strokeDasharray={`${DONUT_CIRC - autoArc} ${autoArc}`}
+              strokeDashoffset={DONUT_CIRC * 0.25 - autoArc}
+              strokeLinecap="round" />
+            <text x="55" y="50" textAnchor="middle" fill="rgba(255,255,255,0.8)" fontSize="13" fontWeight="700">{donutTotal.toLocaleString()}</text>
+            <text x="55" y="65" textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="9">всего</text>
+          </svg>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px', width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+              <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: '#ff9800', flexShrink: 0 }} />
+              <span style={{ color: 'rgba(255,255,255,0.5)', flex: 1 }}>Авто-мут</span>
+              <span style={{ fontWeight: 700, color: '#ff9800' }}>{autoMutes.toLocaleString()}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+              <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: '#ffc800', flexShrink: 0 }} />
+              <span style={{ color: 'rgba(255,255,255,0.5)', flex: 1 }}>Ручной мут</span>
+              <span style={{ fontWeight: 700, color: '#ffc800' }}>{manualMutes.toLocaleString()}</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* ── Bottom row: top users + top channels ── */}
+      {/* ── Channel status + Live event feed ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+        {/* Channel status */}
+        <div className="glass-card" style={{ padding: '18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+            <Tv2 size={13} style={{ color: '#a070ff' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Статус каналов</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
+            {(live?.channel_status ?? []).map(ch => {
+              const dotColor = ch.status === 'connected' ? '#00c878' : ch.status === 'connecting' ? '#ffc800' : '#ff5959';
+              return (
+                <div key={ch.name} style={{ display: 'flex', alignItems: 'center', gap: '7px', padding: '5px 8px', borderRadius: '8px', background: 'rgba(255,255,255,0.025)' }}>
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: dotColor, flexShrink: 0, boxShadow: `0 0 6px ${dotColor}88` }} />
+                  <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ch.name}</span>
+                </div>
+              );
+            })}
+            {(live?.channel_status ?? []).length === 0 && (
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px', gridColumn: '1 / -1' }}>Нет каналов</div>
+            )}
+          </div>
+        </div>
+
+        {/* Live event feed */}
+        <div className="glass-card" style={{ padding: '18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+            <Activity size={13} style={{ color: '#00c878' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Последние события</span>
+            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginLeft: 'auto' }}>авто 15с</span>
+          </div>
+          <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+            {(live?.recent_actions ?? []).length === 0 ? (
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>Нет событий</div>
+            ) : (live?.recent_actions ?? []).map((ev, i) => {
+              const meta = ACTION_META[ev.action] || { color: '#aaa', bg: 'rgba(255,255,255,0.05)', label: ev.action };
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '7px', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '11px' }}>
+                  <span style={{ padding: '2px 6px', borderRadius: '5px', background: meta.bg, color: meta.color, fontWeight: 700, fontSize: '9px', flexShrink: 0 }}>{meta.label}</span>
+                  <span style={{ color: 'rgba(255,255,255,0.6)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {ev.target_username ? <b style={{ color: 'rgba(255,255,255,0.85)' }}>{ev.target_username}</b> : ev.performed_by}
+                    {' '}<span style={{ color: 'rgba(255,255,255,0.3)' }}>в</span>{' '}
+                    <span style={{ color: '#ffc800' }}>{ev.channel_name}</span>
+                  </span>
+                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.25)', flexShrink: 0 }}>{relativeTime(ev.created_at)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Top spammers + Top channels by messages ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         <div className="glass-card" style={{ padding: '18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
@@ -303,30 +532,33 @@ function Overview() {
           ))}
         </div>
 
+        {/* Top channels by messages */}
         <div className="glass-card" style={{ padding: '18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
-            <Tv2 size={13} style={{ color: '#ffc800' }} />
-            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Топ каналов по спаму</span>
+            <MessageSquare size={13} style={{ color: '#5b9eff' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Топ каналов по сообщениям</span>
             <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginLeft: 'auto' }}>7 дней</span>
           </div>
-          {stats.top_channels.length === 0 ? (
+          {channelActivity.length === 0 ? (
             <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>Нет данных</div>
-          ) : stats.top_channels.map((c: any, i: number) => {
-            const spamPct = c.msg_count > 0 ? Math.round(c.spam_count / c.msg_count * 100) : 0;
+          ) : channelActivity.map((c, i) => {
+            const barW = Math.round((c.total_msgs / maxActivity) * 100);
+            const spamPct = c.total_msgs > 0 ? Math.round(c.spam_msgs / c.total_msgs * 100) : 0;
             return (
-              <div key={c.channel_name} style={{
-                padding: '7px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '5px' }}>
+              <div key={c.channel_name} style={{ padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                   <span style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.2)', minWidth: '16px' }}>#{i + 1}</span>
-                  <span style={{ fontWeight: 600, color: '#ffc800', fontSize: '12px', flex: 1 }}>📺 {c.channel_name}</span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: spamPct > 5 ? '#ff7070' : spamPct > 1 ? '#ffc800' : '#00c878' }}>{spamPct}%</span>
+                  <span style={{ fontWeight: 600, color: '#5b9eff', fontSize: '12px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📺 {c.channel_name}</span>
+                  <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>{c.total_msgs.toLocaleString()}</span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: '24px' }}>
-                  <div style={{ flex: 1, height: '3px', borderRadius: '3px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${spamPct}%`, background: spamPct > 5 ? '#ff5959' : '#ffc800', borderRadius: '3px', maxWidth: '100%' }} />
+                <div style={{ paddingLeft: '24px' }}>
+                  <div style={{ height: '4px', borderRadius: '3px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden', marginBottom: '3px' }}>
+                    <div style={{ height: '100%', width: `${barW}%`, background: 'linear-gradient(to right, #5b9eff, #a070ff)', borderRadius: '3px' }} />
                   </div>
-                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>{c.spam_count} / {c.msg_count}</span>
+                  <div style={{ display: 'flex', gap: '10px', fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>
+                    <span>24ч: <b style={{ color: 'rgba(255,255,255,0.5)' }}>{c.msgs_24h.toLocaleString()}</b></span>
+                    <span>спам: <b style={{ color: spamPct > 5 ? '#ff7070' : 'rgba(255,255,255,0.5)' }}>{spamPct}%</b></span>
+                  </div>
                 </div>
               </div>
             );

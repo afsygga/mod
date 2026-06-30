@@ -516,6 +516,48 @@ adminRouter.get('/streams/:id/stats', async (req: Request, res: Response) => {
   }
 });
 
+// Chat speed — messages in last 5 minutes
+adminRouter.get('/stats/live', async (_req: Request, res: Response) => {
+  try {
+    const [msgRate, recentActions, channelStatus, autoVsManual] = await Promise.all([
+      db.query(`SELECT COUNT(*)::int AS c FROM messages WHERE created_at > NOW() - INTERVAL '5 minutes'`),
+      db.query(`SELECT action, performed_by, channel_name, target_username, created_at
+                FROM moderation_logs ORDER BY created_at DESC LIMIT 15`),
+      db.query(`SELECT name, status FROM channels ORDER BY name`),
+      db.query(`SELECT
+                  COUNT(*) FILTER (WHERE action='AUTO_MUTED')::int AS auto_mutes,
+                  COUNT(*) FILTER (WHERE action='MUTED')::int AS manual_mutes
+                FROM moderation_logs WHERE created_at > NOW() - INTERVAL '7 days'`),
+    ]);
+    res.json({
+      msg_per_5min: msgRate.rows[0].c,
+      recent_actions: recentActions.rows,
+      channel_status: channelStatus.rows,
+      auto_vs_manual: autoVsManual.rows[0],
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'live stats failed' });
+  }
+});
+
+// Top channels by total messages (not just spam)
+adminRouter.get('/stats/channels-activity', async (_req: Request, res: Response) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT channel_name,
+        COUNT(*)::int AS total_msgs,
+        COUNT(*) FILTER (WHERE spam_score >= 70)::int AS spam_msgs,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours')::int AS msgs_24h
+      FROM messages
+      WHERE created_at > NOW() - INTERVAL '7 days'
+      GROUP BY channel_name ORDER BY total_msgs DESC LIMIT 10
+    `);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'channels activity failed' });
+  }
+});
+
 // Moderation efficiency: per-channel mute rate (mutes per 100 messages)
 adminRouter.get('/stats/efficiency', async (_req: Request, res: Response) => {
   try {
