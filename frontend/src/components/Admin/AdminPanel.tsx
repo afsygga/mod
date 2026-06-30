@@ -142,7 +142,7 @@ function Overview() {
           sub={`${stats.total_messages.toLocaleString()} сообщений`} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '20px' }}>
-        <KpiCard icon={MessageSquare} label="Сообщений за 24ч" value={stats.messages_24h.toLocaleString()} />
+        <KpiCard icon={MessageSquare} label="Сообщений за 24ч" value={stats.messages_24h.toLocaleString()} color="#5b9eff" />
         <KpiCard icon={Ban} label="Банов всего" value={totalBans.toLocaleString()} color="#ff5959" />
         <KpiCard icon={Mail} label="В whitelist" value={stats.whitelist_count} color="#00c878" />
       </div>
