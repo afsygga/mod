@@ -162,7 +162,7 @@ export class TwitchManager {
     // !g <game name> — set game/category (only for broadcaster or mods with OAuth)
     const GAME_ALIASES: Record<string, string> = {
       '!j': 'Just Chatting',
-      '!cs': 'Counter-Strike 2',
+      '!cs': 'Counter-Strike',
       '!dota': 'Dota 2',
     };
     const alias = GAME_ALIASES[message.trim().toLowerCase()];
@@ -170,10 +170,7 @@ export class TwitchManager {
       const cachedForCmd = await this.getCachedSettings();
       if (!cachedForCmd.setGameEnabled) return;
       this.setGame(channelName, alias, state.primaryEmail).then(reply => {
-        const afsqqConn = [...this.connections.values()].find(c => c.username === 'afsqq' && c.connected);
-        const client = afsqqConn?.client
-          ?? (state.primaryEmail ? this.connections.get(state.primaryEmail)?.client : this.globalClient);
-        client?.say(`#${channelName}`, reply).catch(() => {});
+        this.globalClient?.say(`#${channelName}`, reply).catch(() => {});
       });
       return;
     }
@@ -184,11 +181,7 @@ export class TwitchManager {
       const gameName = message.trim().slice(3).trim();
       if (gameName) {
         this.setGame(channelName, gameName, state.primaryEmail).then(reply => {
-          // Always reply from afsqq's account if connected, else primary
-          const afsqqConn = [...this.connections.values()].find(c => c.username === 'afsqq' && c.connected);
-          const client = afsqqConn?.client
-            ?? (state.primaryEmail ? this.connections.get(state.primaryEmail)?.client : this.globalClient);
-          client?.say(`#${channelName}`, reply).catch(() => {});
+          this.globalClient?.say(`#${channelName}`, reply).catch(() => {});
         });
       }
       return;
