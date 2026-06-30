@@ -23,8 +23,8 @@ function getFrontendUrl(): string {
   return process.env.FRONTEND_URL || 'https://afsyg.gay';
 }
 
-// Step 1: redirect to Twitch OAuth
-twitchOAuthRouter.get('/connect', authenticate, (req: Request, res: Response) => {
+// Step 1: return OAuth URL as JSON (called via fetch with Bearer token, then redirect from JS)
+twitchOAuthRouter.get('/connect-url', authenticate, (req: Request, res: Response) => {
   const clientId = process.env.TWITCH_CLIENT_ID;
   if (!clientId) return res.status(500).json({ error: 'TWITCH_CLIENT_ID not set' });
 
@@ -37,7 +37,7 @@ twitchOAuthRouter.get('/connect', authenticate, (req: Request, res: Response) =>
     state,
     force_verify: 'true',
   });
-  res.redirect(`https://id.twitch.tv/oauth2/authorize?${params}`);
+  res.json({ url: `https://id.twitch.tv/oauth2/authorize?${params}` });
 });
 
 // Step 2: Twitch redirects back with ?code=...
