@@ -236,6 +236,7 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
       const r = await fetch(url, { headers: oauthHeaders });
       if (!r.ok) {
         const errBody: any = await r.json().catch(() => ({}));
+        console.error('[moderators] Twitch API error:', r.status, JSON.stringify(errBody), 'url:', url, 'hasToken:', !!accessToken);
         helixError = `Twitch API ${r.status}: ${errBody?.message || r.statusText}`;
         break;
       }
