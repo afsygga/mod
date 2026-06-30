@@ -167,6 +167,15 @@ async function runMigrations() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    // One-time clean slate: wipe old stream history + chat messages so backend
+    // tracking starts fresh from 2026-07-01. Guarded by a flag so it runs once.
+    const { rows: resetFlag } = await db.query("SELECT 1 FROM settings WHERE key='reset_streams_2026_07_01'");
+    if (resetFlag.length === 0) {
+      await db.query('TRUNCATE stream_sessions RESTART IDENTITY');
+      await db.query('TRUNCATE messages RESTART IDENTITY');
+      await db.query("INSERT INTO settings (key, value) VALUES ('reset_streams_2026_07_01','done') ON CONFLICT (key) DO NOTHING");
+      logger.info('One-time stream/messages reset applied');
+    }
     logger.info('Migrations applied');
   } catch (err) {
     logger.error('Migration failed', err);
@@ -220,6 +229,10 @@ async function start() {
     for (const row of rows) {
       await twitchManager.joinChannel(row.name);
     }
+
+    // Start background stream poller — tracks stream start/end 24/7,
+    // independent of whether any browser has the dashboard open.
+    twitchManager.startStreamPoller();
   } catch (err) {
     logger.error('Startup failed', err);
     process.exit(1);

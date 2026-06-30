@@ -13,20 +13,26 @@ logsRouter.get('/', async (req: Request, res: Response) => {
   const { channel, limit = '500', offset = '0' } = req.query;
   const isAdmin = req.user?.role === 'admin';
   try {
-    let sql = 'SELECT * FROM moderation_logs WHERE 1=1';
+    let sql = `
+      SELECT ml.id, ml.channel_name, ml.username, ml.message, ml.spam_score,
+             ml.reasons, ml.action, ml.duration_seconds, ml.performed_by, ml.created_at,
+             COALESCE(u.twitch_username, u.name, ml.performed_by) AS performed_by_display
+      FROM moderation_logs ml
+      LEFT JOIN users u ON u.email = ml.performed_by
+      WHERE 1=1`;
     const params: any[] = [];
     if (!isAdmin) {
       const owned = await getOwnedChannels(req.user?.email);
       if (owned.length === 0) return res.json([]);
       params.push(owned);
-      sql += ` AND channel_name = ANY($${params.length})`;
+      sql += ` AND ml.channel_name = ANY($${params.length})`;
     }
-    if (channel) { params.push(channel); sql += ` AND channel_name=$${params.length}`; }
+    if (channel) { params.push(channel); sql += ` AND ml.channel_name=$${params.length}`; }
     const safeLimit = Math.min(10000, Math.max(1, parseInt(limit as string) || 500));
     const safeOffset = Math.max(0, parseInt(offset as string) || 0);
     params.push(safeLimit);
     params.push(safeOffset);
-    sql += ` ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`;
+    sql += ` ORDER BY ml.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`;
     const { rows } = await db.query(sql, params);
     res.json(rows);
   } catch {

@@ -1,17 +1,24 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Search, Filter, RefreshCw, Tv2, User, AlertTriangle, Ban, Volume2, Trash2 } from 'lucide-react';
+import { Search, Filter, RefreshCw, Tv2, User, AlertTriangle, Ban, Volume2, Trash2, RotateCcw, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ModerationLog } from '../../types';
 import { api } from '../../hooks/useApi';
 import { T, Lang } from '../../utils/i18n';
 import { Footer } from '../Footer/Footer';
 
-const ACTION_STYLES: Record<string, { bg: string; color: string; icon: any; label: string }> = {
-  MUTED:      { bg: 'rgba(140,80,255,0.12)', color: '#a070ff', icon: Volume2,        label: 'Mute' },
-  BANNED:     { bg: 'rgba(240,71,71,0.12)',  color: '#ff7070', icon: Ban,            label: 'Ban' },
-  AUTO_MUTED: { bg: 'rgba(240,71,71,0.18)',  color: '#ff6060', icon: Volume2,        label: 'Auto' },
-  FLAGGED:    { bg: 'rgba(255,200,0,0.1)',   color: '#ffc800', icon: AlertTriangle,  label: 'Flag' },
+const ACTION_STYLES: Record<string, { bg: string; color: string; icon: any; label: string; labelEn: string }> = {
+  MUTED:      { bg: 'rgba(255,200,0,0.1)',   color: '#ffc800', icon: Volume2,        label: 'Мут',   labelEn: 'Mute' },
+  AUTO_MUTED: { bg: 'rgba(255,152,0,0.12)',  color: '#ff9800', icon: Volume2,        label: 'Авто',  labelEn: 'Auto' },
+  BANNED:     { bg: 'rgba(255,89,89,0.12)',  color: '#ff5959', icon: Ban,            label: 'Бан',   labelEn: 'Ban' },
+  UNBANNED:   { bg: 'rgba(0,200,120,0.12)',  color: '#00c878', icon: RotateCcw,      label: 'Разбан', labelEn: 'Unban' },
+  FLAGGED:    { bg: 'rgba(160,112,255,0.12)',color: '#a070ff', icon: AlertTriangle,  label: 'Флаг',  labelEn: 'Flag' },
 };
+
+function actionLabel(action: string, lang: Lang): string {
+  const s = ACTION_STYLES[action];
+  if (!s) return action;
+  return lang === 'ru' ? s.label : s.labelEn;
+}
 
 function formatDuration(s: number | null): string {
   if (!s) return '—';
@@ -44,6 +51,7 @@ export function Logs({ lang }: { lang: Lang }) {
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState<string>('all');
   const [channelFilter, setChannelFilter] = useState<string>('all');
+  const [dateFilter, setDateFilter] = useState<'all' | 'today' | '7d' | '30d'>('all');
   const [refreshing, setRefreshing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ id?: number; all?: boolean } | null>(null);
   const [hasMore, setHasMore] = useState(true);
@@ -83,22 +91,36 @@ export function Logs({ lang }: { lang: Lang }) {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
+    const now = Date.now();
+    const ranges: Record<string, number> = { today: 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 };
     return logs.filter(l => {
       if (actionFilter !== 'all' && l.action !== actionFilter) return false;
       if (channelFilter !== 'all' && l.channel_name !== channelFilter) return false;
+      if (dateFilter !== 'all') {
+        const span = ranges[dateFilter];
+        if (now - new Date(l.created_at).getTime() > span) return false;
+      }
       if (q && !l.username.toLowerCase().includes(q) && !(l.message || '').toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [logs, search, actionFilter, channelFilter]);
+  }, [logs, search, actionFilter, channelFilter, dateFilter]);
 
   // Stats
-  const stats = useMemo(() => ({
-    total: logs.length,
-    muted: logs.filter(l => l.action === 'MUTED' || l.action === 'AUTO_MUTED').length,
-    banned: logs.filter(l => l.action === 'BANNED').length,
-    flagged: logs.filter(l => l.action === 'FLAGGED').length,
-    auto: logs.filter(l => l.action === 'AUTO_MUTED').length,
-  }), [logs]);
+  const stats = useMemo(() => {
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+    const dayMs = dayStart.getTime();
+    return {
+      total: logs.length,
+      muted: logs.filter(l => l.action === 'MUTED' || l.action === 'AUTO_MUTED').length,
+      banned: logs.filter(l => l.action === 'BANNED').length,
+      flagged: logs.filter(l => l.action === 'FLAGGED').length,
+      auto: logs.filter(l => l.action === 'AUTO_MUTED').length,
+      today: logs.filter(l => new Date(l.created_at).getTime() >= dayMs).length,
+    };
+  }, [logs]);
+
+  // Shared grid template so header + rows align
+  const GRID = '70px 95px 100px 130px 120px 50px minmax(120px,1fr) auto 50px 28px';
 
   const handleDelete = async () => {
     if (!confirmDelete) return;
@@ -126,7 +148,8 @@ export function Logs({ lang }: { lang: Lang }) {
           { num: stats.muted, label: lang === 'ru' ? 'Муты' : 'Mutes', color: '#a070ff' },
           { num: stats.banned, label: lang === 'ru' ? 'Баны' : 'Bans', color: '#ff7070' },
           { num: stats.flagged, label: lang === 'ru' ? 'Помечено' : 'Flagged', color: '#ffc800' },
-          { num: stats.auto, label: lang === 'ru' ? 'Авто' : 'Auto', color: '#00c878' },
+          { num: stats.auto, label: lang === 'ru' ? 'Авто' : 'Auto', color: '#ff9800' },
+          { num: stats.today, label: lang === 'ru' ? 'За сегодня' : 'Today', color: '#00e5cc' },
         ].map(({ num, label, color }) => (
           <div key={label} style={{
             flex: 1, padding: '9px 14px', borderRadius: '11px',
@@ -159,7 +182,7 @@ export function Logs({ lang }: { lang: Lang }) {
 
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
           <Filter size={11} style={{ color: 'rgba(255,255,255,0.3)', marginRight: '4px' }} />
-          {['all', 'MUTED', 'BANNED', 'AUTO_MUTED', 'FLAGGED'].map(a => {
+          {['all', 'MUTED', 'AUTO_MUTED', 'BANNED', 'UNBANNED', 'FLAGGED'].map(a => {
             const active = actionFilter === a;
             const style = a === 'all' ? null : ACTION_STYLES[a];
             return (
@@ -172,7 +195,32 @@ export function Logs({ lang }: { lang: Lang }) {
               }}
               onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-                {a === 'all' ? (lang === 'ru' ? 'Все' : 'All') : style?.label}
+                {a === 'all' ? (lang === 'ru' ? 'Все' : 'All') : actionLabel(a, lang)}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Date range filter */}
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          {([
+            { key: 'today', ru: 'Сегодня', en: 'Today' },
+            { key: '7d', ru: '7 дней', en: '7d' },
+            { key: '30d', ru: '30 дней', en: '30d' },
+            { key: 'all', ru: 'Всё', en: 'All' },
+          ] as const).map(({ key, ru, en }) => {
+            const active = dateFilter === key;
+            return (
+              <button key={key} onClick={() => setDateFilter(key)} style={{
+                padding: '6px 11px', borderRadius: '8px',
+                fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                background: active ? 'rgba(0,229,204,0.1)' : 'transparent',
+                color: active ? '#00e5cc' : 'rgba(255,255,255,0.45)',
+                border: 'none', outline: 'none',
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+                {lang === 'ru' ? ru : en}
               </button>
             );
           })}
@@ -223,7 +271,31 @@ export function Logs({ lang }: { lang: Lang }) {
       </div>
 
       {/* Logs list */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
+        {/* Sticky header */}
+        {!loading && filtered.length > 0 && (
+          <div style={{
+            position: 'sticky', top: 0, zIndex: 5,
+            display: 'grid', gridTemplateColumns: GRID, alignItems: 'center', gap: '12px',
+            padding: '9px 18px',
+            background: 'rgba(10,10,16,0.95)',
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+            fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+            color: 'rgba(255,255,255,0.3)',
+          }}>
+            <div style={{ textAlign: 'right' }}>{lang === 'ru' ? 'Время' : 'Time'}</div>
+            <div>{lang === 'ru' ? 'Действие' : 'Action'}</div>
+            <div>{lang === 'ru' ? 'Канал' : 'Channel'}</div>
+            <div>{lang === 'ru' ? 'Польз.' : 'User'}</div>
+            <div>{lang === 'ru' ? 'Модератор' : 'Moderator'}</div>
+            <div>{lang === 'ru' ? 'Счёт' : 'Score'}</div>
+            <div>{lang === 'ru' ? 'Сообщение' : 'Message'}</div>
+            <div>{lang === 'ru' ? 'Причины' : 'Reasons'}</div>
+            <div>{lang === 'ru' ? 'Длит.' : 'Dur.'}</div>
+            <div></div>
+          </div>
+        )}
+
         {loading && (
           <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>
             {t.loadingLogs}
@@ -237,12 +309,14 @@ export function Logs({ lang }: { lang: Lang }) {
         )}
 
         {filtered.map(log => {
-          const style = ACTION_STYLES[log.action] || { bg: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.4)', icon: AlertTriangle, label: log.action };
+          const style = ACTION_STYLES[log.action] || { bg: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.4)', icon: AlertTriangle, label: log.action, labelEn: log.action };
           const Icon = style.icon;
-          const isAuto = log.performed_by === 'AUTO';
+          const isAuto = log.performed_by === 'AUTO' || log.action === 'AUTO_MUTED';
+          const moderator = log.performed_by_display || log.performed_by;
+          const absTime = new Date(log.created_at).toLocaleString();
           return (
             <div key={log.id} style={{
-              display: 'flex', alignItems: 'center', gap: '12px',
+              display: 'grid', gridTemplateColumns: GRID, alignItems: 'center', gap: '12px',
               padding: '8px 18px',
               borderBottom: '1px solid rgba(255,255,255,0.025)',
               transition: 'background 0.12s',
@@ -252,109 +326,135 @@ export function Logs({ lang }: { lang: Lang }) {
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
 
               {/* Time */}
-              <div style={{
-                fontSize: '10px', color: 'rgba(255,255,255,0.3)',
-                fontFamily: 'monospace', minWidth: '56px', textAlign: 'right',
-              }}>
-                {new Date(log.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              <div style={{ textAlign: 'right' }} title={absTime}>
+                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', fontFamily: 'monospace' }}>
+                  {new Date(log.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </div>
+                <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.22)' }}>
+                  {timeAgo(log.created_at, lang)}
+                </div>
               </div>
 
               {/* Action badge */}
               <div style={{
-                display: 'flex', alignItems: 'center', gap: '5px',
-                padding: '3px 9px', borderRadius: '8px', minWidth: '72px',
+                display: 'inline-flex', alignItems: 'center', gap: '5px', justifySelf: 'start',
+                padding: '3px 9px', borderRadius: '8px',
                 background: style.bg, color: style.color, fontWeight: 700, fontSize: '10px',
-                textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0,
+                textTransform: 'uppercase', letterSpacing: '0.06em',
               }}>
                 <Icon size={10} />
-                {style.label}
-                {isAuto && <span style={{ fontSize: '8px', opacity: 0.7 }}>•</span>}
+                {lang === 'ru' ? style.label : style.labelEn}
               </div>
 
               {/* Channel */}
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '4px',
-                fontSize: '11px', color: '#ffc800', minWidth: '90px', flexShrink: 0,
+                fontSize: '11px', color: '#ffc800', overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
-                <Tv2 size={10} />
-                {log.channel_name}
+                <Tv2 size={10} style={{ flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{log.channel_name}</span>
               </div>
 
               {/* Username */}
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '4px',
                 fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.9)',
-                minWidth: '120px', flexShrink: 0,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
-                <User size={10} style={{ color: 'rgba(255,255,255,0.4)' }} />
-                {log.username}
+                <User size={10} style={{ color: 'rgba(255,255,255,0.4)', flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{log.username}</span>
+              </div>
+
+              {/* Moderator */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '4px',
+                fontSize: '11px', overflow: 'hidden',
+              }}>
+                {isAuto ? (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '3px',
+                    padding: '2px 7px', borderRadius: '999px',
+                    background: 'rgba(255,152,0,0.12)', color: '#ff9800',
+                    fontWeight: 700, fontSize: '9px', letterSpacing: '0.06em',
+                  }}>
+                    <Zap size={9} />
+                    {lang === 'ru' ? 'АВТО' : 'AUTO'}
+                  </span>
+                ) : (
+                  <>
+                    <User size={10} style={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
+                    <span style={{ color: 'rgba(255,255,255,0.55)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {moderator}
+                    </span>
+                  </>
+                )}
               </div>
 
               {/* Score */}
-              {log.spam_score > 0 && (
-                <div style={{
-                  fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', flexShrink: 0,
-                  background: log.spam_score >= 90 ? 'rgba(240,71,71,0.12)' : log.spam_score >= 70 ? 'rgba(255,200,0,0.1)' : 'rgba(255,255,255,0.04)',
-                  color: log.spam_score >= 90 ? '#ff7070' : log.spam_score >= 70 ? '#ffc800' : 'rgba(255,255,255,0.5)',
-                }}>
-                  {log.spam_score}
-                </div>
-              )}
+              <div>
+                {log.spam_score > 0 ? (
+                  <span style={{
+                    display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px',
+                    background: log.spam_score >= 90 ? 'rgba(255,89,89,0.12)' : log.spam_score >= 70 ? 'rgba(255,200,0,0.1)' : 'rgba(255,255,255,0.04)',
+                    color: log.spam_score >= 90 ? '#ff5959' : log.spam_score >= 70 ? '#ffc800' : 'rgba(255,255,255,0.5)',
+                  }}>
+                    {log.spam_score}
+                  </span>
+                ) : <span style={{ color: 'rgba(255,255,255,0.2)' }}>—</span>}
+              </div>
 
               {/* Message */}
               <div style={{
-                flex: 1, fontSize: '11px', color: 'rgba(255,255,255,0.4)',
+                fontSize: '11px', color: 'rgba(255,255,255,0.4)',
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 fontStyle: 'italic',
-              }}>
+              }} title={log.message || ''}>
                 {log.message || '—'}
               </div>
 
               {/* Reasons */}
-              {log.reasons && log.reasons.length > 0 && (
-                <div style={{ display: 'flex', gap: '3px', flexShrink: 0, maxWidth: '260px', overflow: 'hidden' }}>
-                  {log.reasons.slice(0, 3).map((r, i) => (
-                    <span key={i} style={{
-                      fontSize: '9px', padding: '2px 6px', borderRadius: '999px',
-                      background: 'rgba(240,71,71,0.08)', color: '#ff7575',
-                      whiteSpace: 'nowrap',
-                    }}>{r}</span>
-                  ))}
-                  {log.reasons.length > 3 && (
-                    <span style={{ fontSize: '9px', padding: '2px 6px', color: 'rgba(255,255,255,0.4)' }}>
-                      +{log.reasons.length - 3}
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {/* Duration */}
-              {log.duration_seconds && (
-                <div style={{
-                  fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.5)',
-                  padding: '2px 7px', borderRadius: '6px', flexShrink: 0,
-                  background: 'rgba(255,255,255,0.025)',
-                }}>
-                  {formatDuration(log.duration_seconds)}
-                </div>
-              )}
-
-              {/* Ago */}
-              <div style={{
-                fontSize: '10px', color: 'rgba(255,255,255,0.25)',
-                minWidth: '70px', textAlign: 'right', flexShrink: 0,
-              }}>
-                {timeAgo(log.created_at, lang)}
+              <div style={{ display: 'flex', gap: '3px', overflow: 'hidden', maxWidth: '220px' }}>
+                {log.reasons && log.reasons.length > 0 ? (
+                  <>
+                    {log.reasons.slice(0, 2).map((r, i) => (
+                      <span key={i} style={{
+                        fontSize: '9px', padding: '2px 6px', borderRadius: '999px',
+                        background: 'rgba(255,89,89,0.08)', color: '#ff7575',
+                        whiteSpace: 'nowrap',
+                      }}>{r}</span>
+                    ))}
+                    {log.reasons.length > 2 && (
+                      <span style={{ fontSize: '9px', padding: '2px 6px', color: 'rgba(255,255,255,0.4)' }}>
+                        +{log.reasons.length - 2}
+                      </span>
+                    )}
+                  </>
+                ) : <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '10px' }}>—</span>}
               </div>
 
+              {/* Duration */}
+              <div>
+                {log.duration_seconds ? (
+                  <span style={{
+                    fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.5)',
+                    padding: '2px 7px', borderRadius: '6px',
+                    background: 'rgba(255,255,255,0.025)',
+                  }}>
+                    {formatDuration(log.duration_seconds)}
+                  </span>
+                ) : <span style={{ color: 'rgba(255,255,255,0.2)' }}>—</span>}
+              </div>
+
+              {/* Delete */}
               <button onClick={() => setConfirmDelete({ id: log.id })} style={{
                 padding: '4px', borderRadius: '6px', background: 'transparent',
                 border: 'none', outline: 'none', cursor: 'pointer', opacity: 0.5,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
-              onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = 'rgba(240,71,71,0.15)'; }}
+              onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = 'rgba(255,89,89,0.15)'; }}
               onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.background = 'transparent'; }}>
-                <Trash2 size={11} style={{ color: '#ff7070' }} />
+                <Trash2 size={11} style={{ color: '#ff5959' }} />
               </button>
             </div>
           );

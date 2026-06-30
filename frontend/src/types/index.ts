@@ -45,6 +45,7 @@ export interface ModerationLog {
   action: string;
   duration_seconds: number | null;
   performed_by: string;
+  performed_by_display?: string;
   created_at: string;
 }
 

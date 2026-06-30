@@ -548,6 +548,102 @@ export class TwitchManager {
     return this.getHelixHeaders(ownerEmail);
   }
 
+  // ── Stream tracking ──────────────────────────────────────────────────────
+  private streamPollerTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * Poll Helix for live streams across all monitored channels, upsert live
+   * sessions and close ended ones. Returns which channels just started/ended
+   * so callers can broadcast live events.
+   */
+  async syncStreams(): Promise<{ started: string[]; ended: string[]; live: number }> {
+    const channelNames: string[] = this.getChannelNames();
+    if (channelNames.length === 0) return { started: [], ended: [], live: 0 };
+
+    // Get any connected owner email for Helix creds
+    const { rows: ownerRows } = await db.query(
+      'SELECT owner_email FROM channels WHERE name = ANY($1) AND owner_email IS NOT NULL LIMIT 1',
+      [channelNames]
+    );
+    const ownerEmail = ownerRows[0]?.owner_email || null;
+    const headers = await this.getHelixHeaders(ownerEmail);
+
+    // Channels that currently have an open session (before this sync)
+    const { rows: openBefore } = await db.query(
+      'SELECT DISTINCT channel_name FROM stream_sessions WHERE ended_at IS NULL AND channel_name = ANY($1)',
+      [channelNames]
+    );
+    const openBeforeSet = new Set<string>(openBefore.map((r: any) => r.channel_name));
+
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 10_000);
+    let liveStreams: any[] = [];
+    try {
+      const q = channelNames.map((c: string) => `user_login=${encodeURIComponent(c)}`).join('&');
+      const helixRes = await fetch(`https://api.twitch.tv/helix/streams?${q}&first=100`, { headers, signal: ctrl.signal });
+      if (!helixRes.ok) throw new Error(`Helix ${helixRes.status}`);
+      const data: any = await helixRes.json();
+      liveStreams = data.data || [];
+    } finally {
+      clearTimeout(to);
+    }
+
+    const liveChannels = new Set<string>(liveStreams.map((s: any) => s.user_login.toLowerCase()));
+
+    // Upsert live streams
+    for (const stream of liveStreams) {
+      const ch = stream.user_login.toLowerCase();
+      await db.query(`
+        INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers, twitch_stream_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (twitch_stream_id) DO UPDATE SET
+          title = EXCLUDED.title,
+          game = EXCLUDED.game,
+          peak_viewers = GREATEST(stream_sessions.peak_viewers, EXCLUDED.peak_viewers)
+      `, [ch, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, stream.id]);
+    }
+
+    // Close sessions that are no longer live
+    if (liveStreams.length === 0) {
+      await db.query(`
+        UPDATE stream_sessions SET ended_at = NOW()
+        WHERE ended_at IS NULL AND channel_name = ANY($1)
+      `, [channelNames]).catch(() => {});
+    } else {
+      await db.query(`
+        UPDATE stream_sessions SET ended_at = NOW()
+        WHERE ended_at IS NULL
+          AND channel_name = ANY($1)
+          AND (twitch_stream_id IS NULL OR twitch_stream_id NOT IN (${liveStreams.map((_: any, i: number) => `$${i + 2}`).join(',')}))
+      `, [channelNames, ...liveStreams.map((s: any) => s.id)]).catch(() => {});
+    }
+
+    const started = [...liveChannels].filter(ch => !openBeforeSet.has(ch));
+    const ended = [...openBeforeSet].filter(ch => !liveChannels.has(ch));
+    return { started, ended, live: liveStreams.length };
+  }
+
+  /**
+   * Start the background stream poller. Uses setTimeout-recursion (never
+   * overlaps) wrapped in try/catch/finally so a rejection can never become an
+   * unhandled rejection and the loop always reschedules.
+   */
+  startStreamPoller(intervalMs = 60_000): void {
+    if (this.streamPollerTimer) return;
+    const tick = async () => {
+      try {
+        const { started, ended } = await this.syncStreams();
+        for (const ch of started) broadcast(this.wss, { type: 'stream_start', channel: ch, ts: Date.now() });
+        for (const ch of ended) broadcast(this.wss, { type: 'stream_end', channel: ch, ts: Date.now() });
+      } catch (err) {
+        logger.error('stream poll error', err);
+      } finally {
+        this.streamPollerTimer = setTimeout(tick, intervalMs);
+      }
+    };
+    tick();
+  }
+
   private async getHelixHeaders(ownerEmail: string | null) {
     const { clientId, oauth } = await this.getHelixCredentials(ownerEmail);
     return {

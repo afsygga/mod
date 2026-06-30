@@ -947,7 +947,7 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────
-export function Analytics({ initialSection }: { initialSection?: 'mods' | 'streams' } = {}) {
+export function Analytics({ initialSection, streamEventTick }: { initialSection?: 'mods' | 'streams'; streamEventTick?: number } = {}) {
   const [channels, setChannels] = useState<string[]>([]);
   const [selectedChannel, setSelectedChannel] = useState('');
   const [mods, setMods] = useState<TwitchMod[]>([]);
@@ -989,12 +989,18 @@ export function Analytics({ initialSection }: { initialSection?: 'mods' | 'strea
     return () => clearInterval(interval);
   }, []);
 
+  // Live refetch when backend broadcasts a stream start/end over WebSocket
+  useEffect(() => {
+    if (streamEventTick === undefined) return;
+    api.get<StreamSession[]>('/api/admin/streams').then(setStreams).catch(() => {});
+  }, [streamEventTick]);
+
   const loadModsFromLogs = useCallback((ch: string) => {
     api.get<any[]>(`/api/admin/stats/moderators?channel=${encodeURIComponent(ch)}`)
       .then(data => {
         const converted: TwitchMod[] = (data || []).map((m: any) => ({
-          twitch_login: m.twitch_username || m.performed_by,
-          twitch_display_name: m.twitch_display_name || m.display_name || m.performed_by?.split('@')[0] || m.performed_by,
+          twitch_login: m.twitch_username || m.twitch_display_name || m.display_name || '—',
+          twitch_display_name: m.twitch_display_name || m.twitch_username || m.display_name || 'Без Twitch',
           twitch_avatar: m.twitch_avatar || null,
           mutes: m.mutes || 0,
           auto_mutes: m.auto_mutes || 0,
@@ -1004,7 +1010,7 @@ export function Analytics({ initialSection }: { initialSection?: 'mods' | 'strea
           last_action: m.last_action || null,
         }));
         setMods(converted);
-        setModsError('Показаны только модераторы которые действовали через сайт (нет scope channel:read:moderators)');
+        setModsError(null);
       })
       .catch(() => setModsError('Не удалось загрузить данные'))
       .finally(() => setModsLoading(false));
@@ -1061,23 +1067,6 @@ export function Analytics({ initialSection }: { initialSection?: 'mods' | 'strea
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px' }}>
       <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-
-        {/* Section tabs */}
-        <div style={{ display: 'flex', gap: '4px', marginBottom: '24px', padding: '4px', background: 'rgba(255,255,255,0.03)', borderRadius: '11px', width: 'fit-content', border: '1px solid rgba(255,255,255,0.06)' }}>
-          {([['mods', 'Модераторы', Users], ['streams', 'Стримы', Radio]] as const).map(([id, label, Icon]) => (
-            <button key={id} onClick={() => { setSection(id); setSelectedStream(null); }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '7px',
-                padding: '7px 18px', borderRadius: '8px', cursor: 'pointer',
-                fontSize: '12px', fontWeight: 600, border: 'none', outline: 'none',
-                background: section === id ? 'rgba(255,255,255,0.08)' : 'transparent',
-                color: section === id ? '#fff' : 'rgba(255,255,255,0.35)',
-                transition: 'all 0.15s',
-              }}>
-              <Icon size={13} />{label}
-            </button>
-          ))}
-        </div>
 
         {/* ── MODS ── */}
         {section === 'mods' && (

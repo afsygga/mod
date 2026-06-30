@@ -50,6 +50,7 @@ export default function App() {
   const [autoMode, setAutoMode] = useState(true);
   const [wsStatus, setWsStatus] = useState<'connected' | 'connecting' | 'disconnected'>('connecting');
   const [selectedUser, setSelectedUser] = useState<{ username: string; channel: string; color: string } | null>(null);
+  const [streamEventTick, setStreamEventTick] = useState(0);
   const [ignoredRoles, setIgnoredRoles] = useState<string[]>([]);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [twitchSetupOpen, setTwitchSetupOpen] = useState(false);
@@ -167,6 +168,10 @@ export default function App() {
       setQueue(prev => prev.map(q => q.id === stableId ? { ...q, muted: true } : q));
       // Remove after 60 seconds
       setTimeout(() => setQueue(prev => prev.filter(q => q.id !== stableId)), 60000);
+      return;
+    }
+    if (data.type === 'stream_start' || data.type === 'stream_end') {
+      setStreamEventTick(t => t + 1);
       return;
     }
   }, []);
@@ -722,13 +727,13 @@ export default function App() {
 
       {tab === 'analytics' && user.role === 'admin' && (
         <div style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
-          <Analytics initialSection="mods" />
+          <Analytics initialSection="mods" streamEventTick={streamEventTick} />
         </div>
       )}
 
       {tab === 'streams' && user.role === 'admin' && (
         <div style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
-          <Analytics initialSection="streams" />
+          <Analytics initialSection="streams" streamEventTick={streamEventTick} />
         </div>
       )}
 

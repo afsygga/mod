@@ -379,58 +379,9 @@ adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {
 adminRouter.post('/streams/sync', async (_req: Request, res: Response) => {
   try {
     const tm: any = (global as any).twitchManager;
-    if (!tm) return res.json({ synced: 0 });
-
-    const channelNames: string[] = tm.getChannelNames ? tm.getChannelNames() : [];
-    if (channelNames.length === 0) return res.json({ synced: 0 });
-
-    // Get any connected owner email for Helix creds
-    const { rows: ownerRows } = await db.query(
-      'SELECT owner_email FROM channels WHERE name = ANY($1) AND owner_email IS NOT NULL LIMIT 1',
-      [channelNames]
-    );
-    const ownerEmail = ownerRows[0]?.owner_email || null;
-    const headers = await tm.getHelixHeadersPublic(ownerEmail);
-
-    const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 10_000);
-    const q = channelNames.map((c: string) => `user_login=${encodeURIComponent(c)}`).join('&');
-    const helixRes = await fetch(`https://api.twitch.tv/helix/streams?${q}&first=100`, { headers, signal: ctrl.signal });
-    if (!helixRes.ok) return res.json({ synced: 0, error: `Helix ${helixRes.status}` });
-
-    const data: any = await helixRes.json();
-    const liveStreams: any[] = data.data || [];
-    const liveIds = new Set(liveStreams.map((s: any) => s.id));
-
-    // Upsert live streams
-    for (const stream of liveStreams) {
-      const ch = stream.user_login.toLowerCase();
-      await db.query(`
-        INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers, twitch_stream_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (twitch_stream_id) DO UPDATE SET
-          title = EXCLUDED.title,
-          game = EXCLUDED.game,
-          peak_viewers = GREATEST(stream_sessions.peak_viewers, EXCLUDED.peak_viewers)
-      `, [ch, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, stream.id]);
-    }
-
-    // Close sessions that are no longer live
-    if (liveStreams.length === 0) {
-      await db.query(`
-        UPDATE stream_sessions SET ended_at = NOW()
-        WHERE ended_at IS NULL AND channel_name = ANY($1)
-      `, [channelNames]).catch(() => {});
-    } else {
-      await db.query(`
-        UPDATE stream_sessions SET ended_at = NOW()
-        WHERE ended_at IS NULL
-          AND channel_name = ANY($1)
-          AND (twitch_stream_id IS NULL OR twitch_stream_id NOT IN (${liveStreams.map((_: any, i: number) => `$${i + 2}`).join(',')}))
-      `, [channelNames, ...liveStreams.map((s: any) => s.id)]).catch(() => {});
-    }
-
-    res.json({ synced: liveStreams.length });
+    if (!tm?.syncStreams) return res.json({ synced: 0 });
+    const { live } = await tm.syncStreams();
+    res.json({ synced: live });
   } catch (err: any) {
     res.json({ synced: 0, error: err?.message });
   }
