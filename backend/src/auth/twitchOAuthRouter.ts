@@ -6,7 +6,9 @@ import { logger } from '../utils/logger';
 export const twitchOAuthRouter = Router();
 
 const SCOPES = [
-  'channel:read:moderators',
+  'moderator:read:moderators',
+  'channel:manage:moderators',
+  'moderation:read',
   'channel:moderate',
   'chat:edit',
   'chat:read',
