@@ -160,6 +160,24 @@ export class TwitchManager {
     }
 
     // !g <game name> — set game/category (only for broadcaster or mods with OAuth)
+    const GAME_ALIASES: Record<string, string> = {
+      '!j': 'Just Chatting',
+      '!cs': 'Counter-Strike 2',
+      '!dota': 'Dota 2',
+    };
+    const alias = GAME_ALIASES[message.trim().toLowerCase()];
+    if (alias && (userstate.mod || userstate.badges?.broadcaster)) {
+      const cachedForCmd = await this.getCachedSettings();
+      if (!cachedForCmd.setGameEnabled) return;
+      this.setGame(channelName, alias, state.primaryEmail).then(reply => {
+        const afsqqConn = [...this.connections.values()].find(c => c.username === 'afsqq' && c.connected);
+        const client = afsqqConn?.client
+          ?? (state.primaryEmail ? this.connections.get(state.primaryEmail)?.client : this.globalClient);
+        client?.say(`#${channelName}`, reply).catch(() => {});
+      });
+      return;
+    }
+
     if (message.trim().startsWith('!g ') && (userstate.mod || userstate.badges?.broadcaster)) {
       const cachedForCmd = await this.getCachedSettings();
       if (!cachedForCmd.setGameEnabled) return;
