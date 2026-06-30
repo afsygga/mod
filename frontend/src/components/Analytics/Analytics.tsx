@@ -399,197 +399,405 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   );
 }
 
-// ─── zoomable stream chart ────────────────────────────────────────────────────
-function ZoomableStreamChart({ streamId, buckets, maxBucket }: {
+// ─── stream area chart ────────────────────────────────────────────────────────
+function smoothLinePath(pts: [number, number][], w: number, h: number, maxY: number): string {
+  if (pts.length < 2) return '';
+  const toX = (i: number) => (i / (pts.length - 1)) * w;
+  const toY = (v: number) => h - (v / maxY) * h;
+  let d = `M ${toX(0)} ${toY(pts[0][1])}`;
+  for (let i = 1; i < pts.length; i++) {
+    const cpx = (toX(i - 1) + toX(i)) / 2;
+    d += ` C ${cpx} ${toY(pts[i - 1][1])}, ${cpx} ${toY(pts[i][1])}, ${toX(i)} ${toY(pts[i][1])}`;
+  }
+  return d;
+}
+
+function areaFillPath(pts: [number, number][], w: number, h: number, maxY: number): string {
+  if (pts.length < 2) return '';
+  const toX = (i: number) => (i / (pts.length - 1)) * w;
+  const toY = (v: number) => h - (v / maxY) * h;
+  let d = `M ${toX(0)} ${toY(pts[0][1])}`;
+  for (let i = 1; i < pts.length; i++) {
+    const cpx = (toX(i - 1) + toX(i)) / 2;
+    d += ` C ${cpx} ${toY(pts[i - 1][1])}, ${cpx} ${toY(pts[i][1])}, ${toX(i)} ${toY(pts[i][1])}`;
+  }
+  d += ` L ${toX(pts.length - 1)} ${h} L ${toX(0)} ${h} Z`;
+  return d;
+}
+
+function SparkLine({ data, color, w = 80, h = 28 }: { data: number[]; color: string; w?: number; h?: number }) {
+  if (data.length < 2) return null;
+  const maxV = Math.max(...data, 1);
+  const pts: [number, number][] = data.map((v, i) => [i, v]);
+  const line = smoothLinePath(pts, w, h, maxV);
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: `${h}px`, display: 'block', overflow: 'visible' }} preserveAspectRatio="none">
+      <path d={line} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   streamId: number;
-  buckets: { bucket: string; msgs: number; spam: number }[];
-  maxBucket: number;
+  isLive: boolean;
+  startedAt: string;
+  endedAt: string | null;
 }) {
-  const [minuteData, setMinuteData] = useState<MinuteData[] | null>(null);
-  const [zoomed, setZoomed] = useState(false);
-  const [selRange, setSelRange] = useState<[number, number] | null>(null);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; data: MinuteData } | null>(null);
-  // Brush state
-  const [brushStart, setBrushStart] = useState<number | null>(null);
-  const [brushEnd, setBrushEnd] = useState<number | null>(null);
-  const [dragging, setDragging] = useState<'start' | 'end' | 'range' | null>(null);
-  const brushRef = useRef<HTMLDivElement>(null);
-  const BRUSH_W = 100; // percent
+  const [data, setData] = useState<MinuteData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [viewStart, setViewStart] = useState(0);
+  const [viewEnd, setViewEnd] = useState(0);
+  const [tooltip, setTooltip] = useState<{ svgX: number; idx: number } | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [panning, setPanning] = useState(false);
+  const panStartRef = useRef<{ clientX: number; viewStart: number; viewEnd: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const loadMinuteData = useCallback(() => {
-    if (!minuteData) {
-      api.get<MinuteData[]>(`/api/admin/streams/${streamId}/messages-by-minute`)
-        .then(setMinuteData).catch(() => setMinuteData([]));
-    }
-  }, [streamId, minuteData]);
+  const W = 800;
+  const H = 180;
+  const OVERVIEW_H = 40;
+  const Y_LABEL_W = 40;
+  const X_LABEL_H = 24;
+  const CHART_W = W - Y_LABEL_W;
+  const CHART_H = H - X_LABEL_H;
 
-  // Get zoomed slice
-  const zoomedData = (() => {
-    if (!minuteData || minuteData.length === 0) return [];
-    if (!selRange) return minuteData;
-    const [s, e] = selRange;
-    return minuteData.slice(s, e + 1);
-  })();
+  const fetchData = useCallback((append = false) => {
+    api.get<MinuteData[]>(`/api/admin/streams/${streamId}/messages-by-minute`)
+      .then(newData => {
+        setData(prev => {
+          if (!append || prev.length === 0) {
+            const end = newData.length - 1;
+            setViewStart(0);
+            setViewEnd(end);
+            return newData;
+          }
+          // Append only truly new points
+          const lastMinute = prev[prev.length - 1]?.minute;
+          const fresh = newData.filter(d => d.minute > lastMinute);
+          if (fresh.length === 0) return prev;
+          const merged = [...prev, ...fresh];
+          // Auto-scroll: shift viewEnd forward
+          setViewEnd(e => Math.min(merged.length - 1, e + fresh.length));
+          setViewStart(s => Math.min(s + fresh.length, merged.length - 1));
+          return merged;
+        });
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [streamId]);
 
-  const maxMins = Math.max(...zoomedData.map(d => d.msgs), 1);
-  const maxSpam = Math.max(...zoomedData.map(d => d.spam), 1);
+  useEffect(() => {
+    fetchData(false);
+  }, [fetchData]);
 
-  const CHART_H = 80;
-  const CHART_W = 600;
+  useEffect(() => {
+    if (!isLive) return;
+    pollRef.current = setInterval(() => fetchData(true), 30_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [isLive, fetchData]);
 
-  const getXY = (data: MinuteData[], i: number) => ({
-    x: data.length > 1 ? (i / (data.length - 1)) * CHART_W : CHART_W / 2,
-    y: CHART_H - (data[i].msgs / maxMins) * CHART_H,
-  });
+  // Wheel zoom — non-passive to allow preventDefault
+  const zoomRef = useRef({ viewStart: 0, viewEnd: 0, dataLen: 0 });
+  zoomRef.current = { viewStart, viewEnd, dataLen: data.length };
 
-  const areaPath = zoomedData.length > 1
-    ? `M ${zoomedData.map((_, i) => `${getXY(zoomedData, i).x},${getXY(zoomedData, i).y}`).join(' L ')} L ${CHART_W},${CHART_H} L 0,${CHART_H} Z`
-    : '';
-  const spamPath = zoomedData.length > 1
-    ? `M ${zoomedData.map((d, i) => `${getXY(zoomedData, i).x},${CHART_H - (d.spam / maxMins) * CHART_H}`).join(' L ')}`
-    : '';
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { viewStart: vs, viewEnd: ve, dataLen: len } = zoomRef.current;
+      if (len < 2) return;
+      const range = ve - vs;
+      const delta = Math.sign(e.deltaY) * Math.max(1, Math.round(range * 0.1));
+      const newRange = Math.max(5, Math.min(len - 1, range + delta));
+      const svgEl = svgRef.current;
+      let frac = 0.5;
+      if (svgEl) {
+        const rect = svgEl.getBoundingClientRect();
+        frac = Math.max(0, Math.min(1, (e.clientX - rect.left - Y_LABEL_W) / CHART_W));
+      }
+      const anchor = vs + frac * range;
+      let newVs = Math.round(anchor - frac * newRange);
+      let newVe = newVs + newRange;
+      if (newVs < 0) { newVs = 0; newVe = Math.min(len - 1, newRange); }
+      if (newVe >= len) { newVe = len - 1; newVs = Math.max(0, newVe - newRange); }
+      setViewStart(newVs);
+      setViewEnd(newVe);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [CHART_W]);
 
-  const rangeLabel = (() => {
-    if (!selRange || !minuteData) return '';
-    const s = minuteData[selRange[0]];
-    const e = minuteData[selRange[1]];
-    if (!s || !e) return '';
-    return `${mskTime(s.minute)} — ${mskTime(e.minute)}`;
-  })();
+  const viewData = data.slice(viewStart, viewEnd + 1);
+  const maxY = Math.max(...viewData.map(d => d.msgs), 1);
+
+  const msgPts: [number, number][] = viewData.map((d, i) => [i, d.msgs]);
+  const spamPts: [number, number][] = viewData.map((d, i) => [i, d.spam]);
+
+  const msgArea = areaFillPath(msgPts, CHART_W, CHART_H, maxY);
+  const msgLine = smoothLinePath(msgPts, CHART_W, CHART_H, maxY);
+  const spamLine = smoothLinePath(spamPts, CHART_W, CHART_H, maxY);
+
+  // Y grid lines at 25/50/75/100%
+  const gridLevels = [0.25, 0.5, 0.75, 1.0];
+
+  // X labels — show ~5 evenly spaced
+  const xLabelCount = Math.min(6, viewData.length);
+  const xLabelIndices: number[] = [];
+  for (let i = 0; i < xLabelCount; i++) {
+    xLabelIndices.push(Math.round((i / Math.max(1, xLabelCount - 1)) * (viewData.length - 1)));
+  }
+
+  // KPI
+  const totalMsgs = data.reduce((s, d) => s + d.msgs, 0);
+  const totalSpam = data.reduce((s, d) => s + d.spam, 0);
+  const avgMsgsMin = data.length > 0 ? (totalMsgs / data.length).toFixed(1) : '0';
+  const peakMsgsMin = data.length > 0 ? Math.max(...data.map(d => d.msgs)) : 0;
+  const spamPct = totalMsgs > 0 ? Math.round((totalSpam / totalMsgs) * 100) : 0;
+  const sparkMsgs = data.map(d => d.msgs);
+  const sparkSpam = data.map(d => d.spam);
+
+  // Pan handlers
+  const onPanStart = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    setPanning(true);
+    panStartRef.current = { clientX: e.clientX, viewStart, viewEnd };
+  };
+  const onPanMove = (e: React.MouseEvent) => {
+    if (!panning || !panStartRef.current || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const pxPerIdx = rect.width / Math.max(1, viewEnd - viewStart);
+    const dx = Math.round((panStartRef.current.clientX - e.clientX) / pxPerIdx);
+    if (dx === 0) return;
+    const range = panStartRef.current.viewEnd - panStartRef.current.viewStart;
+    let newVs = panStartRef.current.viewStart + dx;
+    let newVe = newVs + range;
+    if (newVs < 0) { newVs = 0; newVe = range; }
+    if (newVe >= data.length) { newVe = data.length - 1; newVs = Math.max(0, newVe - range); }
+    setViewStart(newVs);
+    setViewEnd(newVe);
+  };
+  const onPanEnd = () => setPanning(false);
+
+  // Tooltip hover
+  const onSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
+    const px = e.clientX - rect.left - Y_LABEL_W;
+    const fraction = Math.max(0, Math.min(1, px / CHART_W));
+    const idx = Math.round(fraction * (viewData.length - 1));
+    const svgX = Y_LABEL_W + (idx / Math.max(1, viewData.length - 1)) * CHART_W;
+    setTooltip({ svgX, idx });
+    setTooltipPos({ x: e.clientX, y: e.clientY });
+  };
+
+  // Overview strip
+  const allMaxY = Math.max(...data.map(d => d.msgs), 1);
+  const allMsgPts: [number, number][] = data.map((d, i) => [i, d.msgs]);
+  const overviewLine = data.length > 1 ? smoothLinePath(allMsgPts, CHART_W, OVERVIEW_H - 4, allMaxY) : '';
+  const overviewArea = data.length > 1 ? areaFillPath(allMsgPts, CHART_W, OVERVIEW_H - 4, allMaxY) : '';
+  const rangeLeft = data.length > 1 ? (viewStart / (data.length - 1)) * 100 : 0;
+  const rangeWidth = data.length > 1 ? ((viewEnd - viewStart) / (data.length - 1)) * 100 : 100;
+
+  if (loading) {
+    return (
+      <div style={{ marginBottom: '16px', padding: '18px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>
+        Загрузка данных по минутам...
+      </div>
+    );
+  }
+
+  if (data.length === 0) {
+    return (
+      <div style={{ marginBottom: '16px', padding: '18px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>
+        Нет данных по минутам
+      </div>
+    );
+  }
+
+  const tooltipData = tooltip !== null ? viewData[tooltip.idx] : null;
 
   return (
-    <div style={{ marginBottom: '16px', padding: '18px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', flex: 1 }}>
-          {zoomed ? `Детализация: ${rangeLabel}` : 'Активность по 10-мин интервалам'}
-        </div>
-        {zoomed && (
-          <button onClick={() => { setZoomed(false); setSelRange(null); }}
-            style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '7px', color: 'rgba(255,255,255,0.5)', fontSize: '11px', padding: '4px 10px', cursor: 'pointer' }}>
-            <ChevronLeft size={12} /> Назад
-          </button>
-        )}
+    <div style={{ marginBottom: '16px' }}>
+      {/* KPI cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '10px' }}>
+        {[
+          { label: 'Среднее сообщ/мин', value: avgMsgsMin, color: '#a070ff', spark: sparkMsgs },
+          { label: 'Пик сообщ/мин', value: String(peakMsgsMin), color: '#a070ff', spark: sparkMsgs },
+          { label: 'Всего сообщений', value: totalMsgs.toLocaleString(), color: '#5b9eff', spark: sparkMsgs },
+          { label: 'Спам %', value: `${spamPct}%`, color: '#00e5cc', spark: sparkSpam },
+        ].map(({ label, value, color, spark }) => (
+          <div key={label} style={{ padding: '12px 14px 8px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '4px' }}>{label}</div>
+            <div style={{ fontSize: '22px', fontWeight: 800, color, lineHeight: 1, marginBottom: '6px' }}>{value}</div>
+            <SparkLine data={spark} color={color} />
+          </div>
+        ))}
       </div>
 
-      {!zoomed ? (
-        <>
-          {/* Overview bars */}
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '60px', cursor: 'pointer' }}>
-            {buckets.map((b, i) => {
-              const h = Math.max(2, (b.msgs / maxBucket) * 60);
-              const sh = b.msgs > 0 ? (b.spam / b.msgs) * h : 0;
-              return (
-                <div key={i}
-                  title={`${new Date(b.bucket).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — ${b.msgs} сообщ., ${b.spam} спам`}
-                  onClick={() => { loadMinuteData(); setZoomed(true); setSelRange(null); }}
-                  style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '60px' }}>
-                  <div style={{ width: '100%', height: `${h}px`, borderRadius: '2px 2px 0 0', background: 'rgba(160,112,255,0.3)', position: 'relative', overflow: 'hidden' }}>
-                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${sh}px`, background: 'rgba(0,229,204,0.6)' }} />
-                  </div>
-                </div>
-              );
-            })}
+      {/* Main chart card */}
+      <div ref={containerRef} style={{ padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', userSelect: 'none' }}>
+        {/* Header row */}
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', flex: 1 }}>
+            Активность по минутам
           </div>
-          {/* Brush / range selector */}
-          <div style={{ marginTop: '8px', position: 'relative', height: '24px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px', cursor: 'pointer' }}
-            ref={brushRef}
-            onMouseDown={e => {
-              if (!brushRef.current) return;
-              const rect = brushRef.current.getBoundingClientRect();
-              const pct = (e.clientX - rect.left) / rect.width;
-              const idx = Math.round(pct * (buckets.length - 1));
-              setBrushStart(idx); setBrushEnd(idx); setDragging('end');
-            }}
-            onMouseMove={e => {
-              if (!dragging || !brushRef.current) return;
-              const rect = brushRef.current.getBoundingClientRect();
-              const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-              const idx = Math.round(pct * (buckets.length - 1));
-              if (dragging === 'end') setBrushEnd(idx);
-            }}
-            onMouseUp={() => {
-              if (brushStart !== null && brushEnd !== null && minuteData) {
-                const s = Math.min(brushStart, brushEnd);
-                const e2 = Math.max(brushStart, brushEnd);
-                if (s !== e2) { setSelRange([s, e2]); setZoomed(true); }
-              }
-              setDragging(null);
-            }}
-            onMouseLeave={() => setDragging(null)}>
-            {brushStart !== null && brushEnd !== null && (
-              <div style={{
-                position: 'absolute', top: 0, bottom: 0,
-                left: `${(Math.min(brushStart, brushEnd) / Math.max(buckets.length - 1, 1)) * 100}%`,
-                width: `${(Math.abs(brushEnd - brushStart) / Math.max(buckets.length - 1, 1)) * 100}%`,
-                background: 'rgba(160,112,255,0.25)', border: '1px solid rgba(160,112,255,0.5)', borderRadius: '3px',
-              }} />
-            )}
-            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: '9px', color: 'rgba(255,255,255,0.2)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
-              Перетащите для выбора диапазона или кликните по столбцу
-            </div>
-          </div>
-        </>
-      ) : (
-        <>
-          {/* Zoomed SVG line chart */}
-          {(!minuteData || minuteData.length === 0) ? (
-            <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '12px', padding: '20px 0' }}>Нет данных по минутам</div>
-          ) : (
-            <div style={{ position: 'relative' }}
-              onMouseLeave={() => setTooltip(null)}>
-              <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} style={{ width: '100%', height: '80px', overflow: 'visible' }}
-                onMouseMove={e => {
-                  const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
-                  const px = ((e.clientX - rect.left) / rect.width) * CHART_W;
-                  const idx = Math.round((px / CHART_W) * (zoomedData.length - 1));
-                  const clamped = Math.max(0, Math.min(idx, zoomedData.length - 1));
-                  const d = zoomedData[clamped];
-                  if (d) setTooltip({ x: e.clientX, y: e.clientY, data: d });
-                }}>
-                <defs>
-                  <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#a070ff" stopOpacity="0.4" />
-                    <stop offset="100%" stopColor="#a070ff" stopOpacity="0.02" />
-                  </linearGradient>
-                </defs>
-                {/* Area fill */}
-                {areaPath && <path d={areaPath} fill="url(#areaGrad)" />}
-                {/* Spam line */}
-                {spamPath && <path d={spamPath} fill="none" stroke="rgba(255,89,89,0.9)" strokeWidth="1.5" />}
-                {/* Spam user dots */}
-                {zoomedData.map((d, i) => d.spam_users > 0 && (
-                  <circle key={i}
-                    cx={getXY(zoomedData, i).x}
-                    cy={CHART_H - (d.spam / maxMins) * CHART_H}
-                    r={Math.min(5, 2 + d.spam_users)}
-                    fill="#00e5cc" opacity="0.8" />
-                ))}
-              </svg>
-              {/* Legend */}
-              <div style={{ display: 'flex', gap: '16px', marginTop: '8px' }}>
-                {[['#a070ff', 'Сообщения/мин'], ['rgba(255,89,89,0.9)', 'Спам/мин'], ['#00e5cc', 'Спам-юзеры']].map(([c, l]) => (
-                  <span key={l} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>
-                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: c, display: 'inline-block' }} />{l}
-                  </span>
-                ))}
-              </div>
-              {/* Tooltip */}
-              {tooltip && (
-                <div style={{
-                  position: 'fixed', left: tooltip.x + 12, top: tooltip.y - 40, zIndex: 9999,
-                  background: 'rgba(12,12,18,0.98)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px',
-                  padding: '8px 12px', pointerEvents: 'none', fontSize: '11px',
-                }}>
-                  <div style={{ color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>{mskTime(tooltip.data.minute)}</div>
-                  <div style={{ color: '#a070ff' }}>Сообщений: {tooltip.data.msgs}</div>
-                  <div style={{ color: 'rgba(255,89,89,0.9)' }}>Спам: {tooltip.data.spam}</div>
-                  <div style={{ color: '#00e5cc' }}>Спам-юзеров: {tooltip.data.spam_users}</div>
-                </div>
-              )}
+          {/* LIVE badge */}
+          {isLive && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '3px 10px', borderRadius: '20px', background: 'rgba(0,200,120,0.1)', border: '1px solid rgba(0,200,120,0.25)' }}>
+              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00c878', animation: 'livePulse 1.5s ease-in-out infinite' }} />
+              <span style={{ fontSize: '10px', fontWeight: 800, color: '#00c878', letterSpacing: '0.12em' }}>LIVE</span>
             </div>
           )}
-        </>
-      )}
+          {/* Legend */}
+          <div style={{ display: 'flex', gap: '14px', marginLeft: '16px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>
+              <span style={{ width: '10px', height: '3px', borderRadius: '2px', background: '#a070ff', display: 'inline-block' }} />
+              Сообщений
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>
+              <span style={{ width: '10px', height: '2px', borderRadius: '1px', background: '#00e5cc', display: 'inline-block' }} />
+              Спам
+            </span>
+          </div>
+        </div>
+
+        {/* SVG chart */}
+        <div style={{ position: 'relative', cursor: panning ? 'grabbing' : 'crosshair' }}
+          onMouseDown={onPanStart}
+          onMouseMove={onPanMove}
+          onMouseUp={onPanEnd}
+          onMouseLeave={() => { setTooltip(null); onPanEnd(); }}>
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${W} ${H}`}
+            style={{ width: '100%', height: '200px', display: 'block', overflow: 'visible' }}
+            preserveAspectRatio="none"
+            onMouseMove={onSvgMouseMove}
+          >
+            <defs>
+              <linearGradient id="sacAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#a070ff" stopOpacity="0.4" />
+                <stop offset="100%" stopColor="#a070ff" stopOpacity="0" />
+              </linearGradient>
+              <clipPath id="sacClip">
+                <rect x={Y_LABEL_W} y={0} width={CHART_W} height={CHART_H} />
+              </clipPath>
+            </defs>
+
+            {/* Y axis labels + grid lines */}
+            {gridLevels.map(f => {
+              const yVal = Math.round(f * maxY);
+              const yPx = CHART_H - f * CHART_H;
+              return (
+                <g key={f}>
+                  <line x1={Y_LABEL_W} y1={yPx} x2={W} y2={yPx}
+                    stroke="rgba(255,255,255,0.05)" strokeWidth="1" strokeDasharray="4 4" />
+                  <text x={Y_LABEL_W - 6} y={yPx + 4} textAnchor="end"
+                    style={{ fontSize: '9px', fill: 'rgba(255,255,255,0.25)', fontFamily: 'Inter,sans-serif' }}>
+                    {yVal}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Chart content clipped */}
+            <g clipPath="url(#sacClip)" transform={`translate(${Y_LABEL_W}, 0)`}>
+              {/* Area fill */}
+              {msgArea && <path d={msgArea} fill="url(#sacAreaGrad)" />}
+              {/* Msgs line */}
+              {msgLine && <path d={msgLine} fill="none" stroke="#a070ff" strokeWidth="2" strokeLinecap="round" />}
+              {/* Spam line */}
+              {spamLine && <path d={spamLine} fill="none" stroke="#00e5cc" strokeWidth="2" strokeLinecap="round" strokeDasharray="0" />}
+            </g>
+
+            {/* Crosshair */}
+            {tooltip && (
+              <line x1={tooltip.svgX} y1={0} x2={tooltip.svgX} y2={CHART_H}
+                stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
+            )}
+
+            {/* X axis labels */}
+            {xLabelIndices.map(idx => {
+              if (idx >= viewData.length) return null;
+              const d = viewData[idx];
+              const xPx = Y_LABEL_W + (idx / Math.max(1, viewData.length - 1)) * CHART_W;
+              return (
+                <text key={idx} x={xPx} y={CHART_H + 16} textAnchor="middle"
+                  style={{ fontSize: '9px', fill: 'rgba(255,255,255,0.25)', fontFamily: 'Inter,sans-serif' }}>
+                  {mskTime(d.minute)}
+                </text>
+              );
+            })}
+          </svg>
+
+          {/* Floating tooltip */}
+          {tooltip && tooltipData && (
+            <div style={{
+              position: 'fixed',
+              left: tooltipPos.x + 14,
+              top: tooltipPos.y - 60,
+              zIndex: 9999,
+              background: 'rgba(8,8,18,0.95)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: '10px',
+              padding: '10px 14px',
+              pointerEvents: 'none',
+              fontSize: '11px',
+              minWidth: '160px',
+            }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginBottom: '6px' }}>
+                {msk(tooltipData.minute)}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '3px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#a070ff', flexShrink: 0 }} />
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>Сообщений/мин:</span>
+                <span style={{ color: '#a070ff', fontWeight: 700, marginLeft: 'auto' }}>{tooltipData.msgs}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '3px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00e5cc', flexShrink: 0 }} />
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>Спам/мин:</span>
+                <span style={{ color: '#00e5cc', fontWeight: 700, marginLeft: 'auto' }}>{tooltipData.spam}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#5b9eff', flexShrink: 0 }} />
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>Спам-юзеров:</span>
+                <span style={{ color: '#5b9eff', fontWeight: 700, marginLeft: 'auto' }}>{tooltipData.spam_users}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Overview strip */}
+        <div style={{ marginTop: '8px', position: 'relative', height: `${OVERVIEW_H}px`, background: 'rgba(255,255,255,0.02)', borderRadius: '6px', overflow: 'hidden' }}>
+          <svg viewBox={`0 0 ${CHART_W} ${OVERVIEW_H - 4}`} style={{ width: '100%', height: '100%', display: 'block' }} preserveAspectRatio="none">
+            {overviewArea && <path d={overviewArea} fill="rgba(160,112,255,0.12)" />}
+            {overviewLine && <path d={overviewLine} fill="none" stroke="rgba(160,112,255,0.4)" strokeWidth="1" />}
+          </svg>
+          {/* Selected range indicator */}
+          <div style={{
+            position: 'absolute', top: 0, bottom: 0,
+            left: `${rangeLeft}%`,
+            width: `${rangeWidth}%`,
+            background: 'rgba(160,112,255,0.15)',
+            border: '1px solid rgba(160,112,255,0.4)',
+            borderRadius: '3px',
+            pointerEvents: 'none',
+          }} />
+          {data.length > 1 && (
+            <div style={{ position: 'absolute', bottom: '3px', left: '6px', fontSize: '8px', color: 'rgba(255,255,255,0.2)', pointerEvents: 'none' }}>
+              {mskTime(data[0].minute)} — {mskTime(data[data.length - 1].minute)}
+            </div>
+          )}
+        </div>
+        <div style={{ marginTop: '4px', fontSize: '9px', color: 'rgba(255,255,255,0.2)', textAlign: 'center' }}>
+          Колёсико мыши — масштаб · Перетащите — прокрутка
+        </div>
+      </div>
+
+      {/* LIVE pulse animation */}
+      <style>{`@keyframes livePulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.4)} }`}</style>
     </div>
   );
 }
@@ -690,10 +898,13 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
         </div>
       )}
 
-      {/* Zoomable 10-min bucket chart */}
-      {buckets && buckets.length > 0 && (
-        <ZoomableStreamChart streamId={streamId} buckets={buckets} maxBucket={maxBucket} />
-      )}
+      {/* Stream area chart */}
+      <StreamAreaChart
+        streamId={streamId}
+        isLive={!session.ended_at}
+        startedAt={session.started_at}
+        endedAt={session.ended_at}
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         {/* Timeline */}
