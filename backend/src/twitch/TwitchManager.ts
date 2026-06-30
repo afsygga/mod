@@ -159,6 +159,20 @@ export class TwitchManager {
       if (ownerEmail !== null) return;
     }
 
+    // !g <game name> — set game/category (only for broadcaster or mods with OAuth)
+    if (message.trim().startsWith('!g ') && (userstate.mod || userstate.badges?.broadcaster)) {
+      const gameName = message.trim().slice(3).trim();
+      if (gameName) {
+        this.setGame(channelName, gameName, state.primaryEmail).then(reply => {
+          const client = state.primaryEmail
+            ? this.connections.get(state.primaryEmail)?.client
+            : this.globalClient;
+          client?.say(`#${channelName}`, reply).catch(() => {});
+        });
+      }
+      return;
+    }
+
     const analysis = state.engine.analyze(username, message);
 
     const cachedSettings = await this.getCachedSettings();
@@ -472,6 +486,41 @@ export class TwitchManager {
       clientId: process.env.TWITCH_CLIENT_ID || '',
       oauth: (process.env.TWITCH_BOT_OAUTH || '').replace('oauth:', ''),
     };
+  }
+
+  private async setGame(channelName: string, gameName: string, ownerEmail: string | null): Promise<string> {
+    try {
+      const headers = await this.getHelixHeaders(ownerEmail);
+      // 1. Search for the game
+      const searchRes = await fetch(`https://api.twitch.tv/helix/games?name=${encodeURIComponent(gameName)}`, { headers });
+      const searchData: any = await searchRes.json();
+      const game = searchData.data?.[0];
+      if (!game) return `Игра не найдена: ${gameName}`;
+
+      // 2. Get broadcaster_id
+      const { rows } = await db.query('SELECT twitch_id FROM twitch_user_meta WHERE username=$1', [channelName]);
+      let broadcasterId: string = rows[0]?.twitch_id || '';
+      if (!broadcasterId) {
+        const ur = await fetch(`https://api.twitch.tv/helix/users?login=${channelName}`, { headers });
+        const ud: any = await ur.json();
+        broadcasterId = ud.data?.[0]?.id || '';
+      }
+      if (!broadcasterId) return 'Не удалось найти broadcaster_id';
+
+      // 3. Update channel
+      const patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ game_id: game.id }),
+      });
+      if (!patchRes.ok) {
+        const err: any = await patchRes.json().catch(() => ({}));
+        return `Ошибка: ${err?.message || patchRes.status}`;
+      }
+      return `Категория изменена: ${game.name}`;
+    } catch (err: any) {
+      return `Ошибка: ${err?.message}`;
+    }
   }
 
   async getHelixHeadersPublic(ownerEmail: string | null) {

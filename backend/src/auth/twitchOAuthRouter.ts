@@ -10,6 +10,7 @@ const SCOPES = [
   'channel:manage:moderators',
   'moderation:read',
   'channel:moderate',
+  'channel:manage:broadcast',
   'chat:edit',
   'chat:read',
   'moderator:manage:banned_users',
