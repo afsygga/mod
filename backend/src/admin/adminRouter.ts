@@ -618,3 +618,100 @@ adminRouter.get('/stats/heatmap', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'heatmap failed' });
   }
 });
+
+// Heatmap detail — stream info for a specific day
+adminRouter.get('/stats/heatmap-detail', async (req: Request, res: Response) => {
+  try {
+    const date = req.query.date as string;
+    const channel = (req.query.channel as string) || null;
+    if (!date) return res.status(400).json({ error: 'date required' });
+    const { rows } = await db.query(`
+      SELECT s.title, s.game, s.peak_viewers,
+        EXTRACT(EPOCH FROM (COALESCE(s.ended_at, NOW()) - s.started_at))::int AS duration_sec,
+        COUNT(m.id)::int AS msg_count
+      FROM stream_sessions s
+      LEFT JOIN messages m ON m.channel_name = s.channel_name
+        AND m.created_at BETWEEN s.started_at AND COALESCE(s.ended_at, NOW())
+      WHERE date_trunc('day', s.started_at AT TIME ZONE 'Europe/Moscow')::date = $1::date
+        AND ($2::text IS NULL OR s.channel_name = $2)
+      GROUP BY s.id, s.title, s.game, s.peak_viewers, s.started_at, s.ended_at
+      ORDER BY s.started_at DESC LIMIT 1
+    `, [date, channel]);
+    res.json(rows[0] || null);
+  } catch (err) {
+    res.status(500).json({ error: 'heatmap detail failed' });
+  }
+});
+
+// Moderator profile — full stats for a specific moderator
+adminRouter.get('/moderators/:username/profile', async (req: Request, res: Response) => {
+  try {
+    const username = req.params.username;
+    const channel = (req.query.channel as string) || null;
+
+    const [actionBreakdown, dailyActivity, recentActions, avgRespRow, metaRow] = await Promise.all([
+      db.query(`
+        SELECT action, COUNT(*)::int AS c FROM moderation_logs
+        WHERE performed_by=$1 AND ($2::text IS NULL OR channel_name=$2)
+        GROUP BY action ORDER BY c DESC
+      `, [username, channel]),
+      db.query(`
+        SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS c
+        FROM moderation_logs
+        WHERE performed_by=$1 AND ($2::text IS NULL OR channel_name=$2)
+          AND created_at > NOW() - INTERVAL '30 days'
+        GROUP BY day ORDER BY day
+      `, [username, channel]),
+      db.query(`
+        SELECT action, target_username, channel_name, created_at FROM moderation_logs
+        WHERE performed_by=$1 AND ($2::text IS NULL OR channel_name=$2)
+        ORDER BY created_at DESC LIMIT 20
+      `, [username, channel]),
+      db.query(`
+        SELECT ROUND(AVG(EXTRACT(EPOCH FROM (created_at - LAG(created_at) OVER (ORDER BY created_at))))::numeric, 1) AS avg_response_sec
+        FROM moderation_logs WHERE performed_by=$1 AND action='MUTED' AND ($2::text IS NULL OR channel_name=$2)
+      `, [username, channel]),
+      db.query(`
+        SELECT tm.profile_image_url, tm.display_name
+        FROM users u
+        LEFT JOIN twitch_user_meta tm ON tm.username = LOWER(u.twitch_username)
+        WHERE u.email=$1 OR LOWER(u.twitch_username)=$1
+        LIMIT 1
+      `, [username]),
+    ]);
+
+    res.json({
+      action_breakdown: actionBreakdown.rows,
+      daily_activity: dailyActivity.rows,
+      recent_actions: recentActions.rows,
+      avg_response_sec: avgRespRow.rows[0]?.avg_response_sec || null,
+      profile_image_url: metaRow.rows[0]?.profile_image_url || null,
+      display_name: metaRow.rows[0]?.display_name || null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'moderator profile failed' });
+  }
+});
+
+// Per-minute message data for a stream session (for zoomed chart)
+adminRouter.get('/streams/:id/messages-by-minute', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { rows: [session] } = await db.query('SELECT * FROM stream_sessions WHERE id=$1', [id]);
+    if (!session) return res.status(404).json({ error: 'not found' });
+    const endAt = session.ended_at || new Date().toISOString();
+    const { rows } = await db.query(`
+      SELECT
+        date_trunc('minute', created_at) AS minute,
+        COUNT(*)::int AS msgs,
+        COUNT(*) FILTER (WHERE spam_score >= 70)::int AS spam,
+        COUNT(DISTINCT username) FILTER (WHERE spam_score >= 70)::int AS spam_users
+      FROM messages
+      WHERE channel_name=$1 AND created_at BETWEEN $2 AND $3
+      GROUP BY minute ORDER BY minute
+    `, [session.channel_name, session.started_at, endAt]);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'messages by minute failed' });
+  }
+});
