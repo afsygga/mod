@@ -166,9 +166,10 @@ export class TwitchManager {
       const gameName = message.trim().slice(3).trim();
       if (gameName) {
         this.setGame(channelName, gameName, state.primaryEmail).then(reply => {
-          const client = state.primaryEmail
-            ? this.connections.get(state.primaryEmail)?.client
-            : this.globalClient;
+          // Always reply from afsqq's account if connected, else primary
+          const afsqqConn = [...this.connections.values()].find(c => c.username === 'afsqq' && c.connected);
+          const client = afsqqConn?.client
+            ?? (state.primaryEmail ? this.connections.get(state.primaryEmail)?.client : this.globalClient);
           client?.say(`#${channelName}`, reply).catch(() => {});
         });
       }
