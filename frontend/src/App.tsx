@@ -51,6 +51,7 @@ export default function App() {
   const [wsStatus, setWsStatus] = useState<'connected' | 'connecting' | 'disconnected'>('connecting');
   const [selectedUser, setSelectedUser] = useState<{ username: string; channel: string; color: string } | null>(null);
   const [streamEventTick, setStreamEventTick] = useState(0);
+  const [logEventTick, setLogEventTick] = useState(0);
   const [ignoredRoles, setIgnoredRoles] = useState<string[]>([]);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [twitchSetupOpen, setTwitchSetupOpen] = useState(false);
@@ -172,6 +173,10 @@ export default function App() {
     }
     if (data.type === 'stream_start' || data.type === 'stream_end') {
       setStreamEventTick(t => t + 1);
+      return;
+    }
+    if (data.type === 'mod_action') {
+      setLogEventTick(t => t + 1);
       return;
     }
   }, []);
@@ -710,7 +715,7 @@ export default function App() {
           <div style={{ padding: '12px 18px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
             <span style={{ fontSize: '14px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{t.moderationLogs}</span>
           </div>
-          <Logs lang={lang} />
+          <Logs lang={lang} liveTick={logEventTick} />
         </div>
       )}
 

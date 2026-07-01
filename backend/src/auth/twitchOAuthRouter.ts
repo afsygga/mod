@@ -16,6 +16,13 @@ const SCOPES = [
   'moderator:manage:banned_users',
   'moderator:manage:chat_messages',
   'user:read:email',
+  // Required for EventSub channel.moderate (v2) — live capture of all mod actions
+  'moderator:read:blocked_terms',
+  'moderator:read:chat_settings',
+  'moderator:read:unban_requests',
+  'moderator:read:warnings',
+  'moderator:read:vips',
+  'moderator:read:suspicious_users',
 ].join(' ');
 
 function getRedirectUri(req: Request): string {
@@ -115,6 +122,9 @@ twitchOAuthRouter.get('/callback', async (req: Request, res: Response) => {
       await tm.ensureUserConnection(email, twitchUser.login, oauthToken).catch(() => {});
       await tm.forceRejoinUserChannels(email).catch(() => {});
     }
+    // Re-subscribe EventSub now that a (possibly newly-scoped) token exists
+    const es = (global as any).eventSubManager;
+    if (es) es.refresh().catch(() => {});
 
     res.redirect(`${frontendUrl}?twitch_connected=1&twitch_login=${encodeURIComponent(twitchUser.login)}`);
   } catch (err) {

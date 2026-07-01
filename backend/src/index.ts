@@ -25,6 +25,7 @@ import { telegramRouter } from './telegram/telegramRouter';
 import { adminRouter } from './admin/adminRouter';
 import { authenticate } from './auth/authMiddleware';
 import { TwitchManager } from './twitch/TwitchManager';
+import { EventSubManager } from './twitch/EventSubManager';
 import { TelegramBot } from './telegram/TelegramBot';
 import { wsHandler } from './websocket/wsHandler';
 import { logger } from './utils/logger';
@@ -88,6 +89,9 @@ wsHandler(wss);
 
 const twitchManager = new TwitchManager(wss);
 (global as any).twitchManager = twitchManager;
+
+const eventSubManager = new EventSubManager(wss);
+(global as any).eventSubManager = eventSubManager;
 
 const PORT = parseInt(process.env.PORT || '4000');
 
@@ -233,6 +237,10 @@ async function start() {
     // Start background stream poller — tracks stream start/end 24/7,
     // independent of whether any browser has the dashboard open.
     twitchManager.startStreamPoller();
+
+    // Start EventSub — captures ALL moderation actions (bans/timeouts/unbans/
+    // deletes) from any client, live, and writes them to moderation_logs.
+    eventSubManager.start();
   } catch (err) {
     logger.error('Startup failed', err);
     process.exit(1);

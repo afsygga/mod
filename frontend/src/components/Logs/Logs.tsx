@@ -45,7 +45,7 @@ function timeAgo(iso: string, lang: Lang): string {
   return `${Math.floor(diff/86400)}d ago`;
 }
 
-export function Logs({ lang }: { lang: Lang }) {
+export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   const [logs, setLogs] = useState<ModerationLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -83,6 +83,12 @@ export function Logs({ lang }: { lang: Lang }) {
     const i = setInterval(() => loadLogs(true), 10000);
     return () => clearInterval(i);
   }, []);
+
+  // Live refresh when backend broadcasts a moderation action (EventSub)
+  useEffect(() => {
+    if (liveTick === undefined || liveTick === 0) return;
+    loadLogs(true);
+  }, [liveTick]);
 
   const channels = useMemo(() => {
     const set = new Set(logs.map(l => l.channel_name));
