@@ -380,14 +380,14 @@ adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {
       : '';
 
     // performed_by is a site email (site actions) or a Twitch login (EventSub).
-    // Resolve a Twitch login for every actor so the UI never shows a raw email.
+    // Group by the RESOLVED twitch login so the same person logged under both an
+    // email and a Twitch login is merged into one row (no duplicates).
     const { rows } = await db.query(`
       SELECT
-        ml.performed_by,
-        u.name AS display_name,
-        COALESCE(u.twitch_username, ml.performed_by) AS twitch_username,
-        tm.profile_image_url AS twitch_avatar,
-        tm.display_name AS twitch_display_name,
+        LOWER(COALESCE(u.twitch_username, ml.performed_by)) AS twitch_username,
+        MAX(u.name) AS display_name,
+        MAX(tm.profile_image_url) AS twitch_avatar,
+        MAX(tm.display_name) AS twitch_display_name,
         COUNT(*) FILTER (WHERE ml.action='MUTED')::int AS mutes,
         COUNT(*) FILTER (WHERE ml.action='AUTO_MUTED')::int AS auto_mutes,
         COUNT(*) FILTER (WHERE ml.action='BANNED')::int AS bans,
@@ -398,7 +398,7 @@ adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {
       LEFT JOIN users u ON u.email = ml.performed_by
       LEFT JOIN twitch_user_meta tm ON tm.username = LOWER(COALESCE(u.twitch_username, ml.performed_by))
       WHERE ml.performed_by NOT IN ('AUTO', 'console', 'bulk', 'dashboard') ${channelFilter}
-      GROUP BY ml.performed_by, u.name, u.twitch_username, tm.profile_image_url, tm.display_name
+      GROUP BY LOWER(COALESCE(u.twitch_username, ml.performed_by))
       ORDER BY total DESC
       LIMIT 50
     `, params);
