@@ -631,7 +631,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   const CHART_H = H - X_LABEL_H;
 
   const fetchData = useCallback((append = false) => {
-    api.get<MinuteData[]>(`/api/admin/streams/${streamId}/messages-by-minute`)
+    api.get<MinuteData[]>(`/api/streams/${streamId}/messages-by-minute`)
       .then(newData => {
         setData(prev => {
           if (!append || prev.length === 0) {
@@ -989,7 +989,7 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
   const [data, setData] = useState<StreamStats | null>(null);
 
   useEffect(() => {
-    api.get<StreamStats>(`/api/admin/streams/${streamId}/stats`).then(setData);
+    api.get<StreamStats>(`/api/streams/${streamId}/stats`).then(setData);
   }, [streamId]);
 
   if (!data) return <div style={{ color: 'rgba(255,255,255,0.3)', padding: '40px', fontSize: '13px' }}>Загрузка...</div>;
@@ -1130,12 +1130,12 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const heatmapTooltipCache = useRef<Record<string, any>>({});
 
   useEffect(() => {
-    api.get<{ day: string; count: number }[]>('/api/admin/stats/heatmap').then(setHeatmap).catch(() => {});
+    api.get<{ day: string; count: number }[]>('/api/streams/heatmap').then(setHeatmap).catch(() => {});
   }, []);
 
   useEffect(() => {
     const loadStreams = () =>
-      api.get<StreamSession[]>('/api/admin/streams').catch(() => [] as StreamSession[]);
+      api.get<StreamSession[]>('/api/streams').catch(() => [] as StreamSession[]);
 
     const sync = () =>
       api.post<any>('/api/admin/streams/sync', {})
@@ -1159,7 +1159,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   // Live refetch when backend broadcasts a stream start/end over WebSocket
   useEffect(() => {
     if (streamEventTick === undefined) return;
-    api.get<StreamSession[]>('/api/admin/streams').then(setStreams).catch(() => {});
+    api.get<StreamSession[]>('/api/streams').then(setStreams).catch(() => {});
   }, [streamEventTick]);
 
   const loadModsFromLogs = useCallback((ch: string) => {
@@ -1209,7 +1209,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
     // Fetch stream info
     const chParam = selectedChannel ? `&channel=${encodeURIComponent(selectedChannel)}` : '';
     try {
-      const info = await api.get<any>(`/api/admin/stats/heatmap-detail?date=${key}${chParam}`);
+      const info = await api.get<any>(`/api/streams/heatmap-detail?date=${key}${chParam}`);
       heatmapTooltipCache.current[key] = info;
       setHeatmapTooltip({ x: rect.left + rect.width / 2, y: rect.top, date: key, count, streamInfo: info });
     } catch {

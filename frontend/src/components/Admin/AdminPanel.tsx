@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users, Mail, Tv2, Activity, BarChart3, Trash2, Shield, ShieldOff,
   UserPlus, Search, Crown, X, Plus, TrendingUp, MessageSquare, Zap,
-  VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown, Circle, Clock, Wifi,
+  VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown, Circle, Clock, Wifi, ShieldCheck,
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
@@ -123,11 +123,13 @@ function Overview() {
   const [channelActivity, setChannelActivity] = useState<ChannelActivity[]>([]);
   const [onlineExpanded, setOnlineExpanded] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [channelAuth, setChannelAuth] = useState<Array<{ channel: string; broadcaster_auth: boolean; eventsub_actions: boolean; eventsub_stream: boolean }>>([]);
 
   const loadLive = () => {
     api.get<LiveStats>('/api/admin/stats/live').then(d => { setLive(d); setLastUpdated(new Date()); }).catch(() => {});
     api.get<ChannelActivity[]>('/api/admin/stats/channels-activity').then(setChannelActivity).catch(() => {});
     api.get<{ count: number; users: any[] }>('/api/admin/online').then(setOnline).catch(() => {});
+    api.get<Array<{ channel: string; broadcaster_auth: boolean; eventsub_actions: boolean; eventsub_stream: boolean }>>('/api/admin/channels/auth').then(setChannelAuth).catch(() => {});
   };
 
   const load = () => {
@@ -664,6 +666,49 @@ function Overview() {
             })}
           </div>
         </div>
+      </div>
+
+      {/* ── Channel authorization (Twitch OAuth vs token) ── */}
+      <div style={{
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+        borderRadius: '14px', padding: '18px', marginBottom: '12px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+          <ShieldCheck size={13} style={{ color: '#00c878' }} />
+          <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Авторизация каналов</span>
+        </div>
+        {channelAuth.length === 0 ? (
+          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>Нет каналов</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '8px' }}>
+            {channelAuth.map(ch => (
+              <div key={ch.channel} style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '9px 11px', borderRadius: '10px', background: 'rgba(255,255,255,0.025)',
+              }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.8)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {ch.channel}
+                </span>
+                <span style={{
+                  fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
+                  background: ch.broadcaster_auth ? 'rgba(0,200,120,0.14)' : 'rgba(255,255,255,0.06)',
+                  color: ch.broadcaster_auth ? '#00c878' : 'rgba(255,255,255,0.3)',
+                  flexShrink: 0, whiteSpace: 'nowrap',
+                }}>
+                  {ch.broadcaster_auth ? 'Twitch OAuth' : 'Токен'}
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '3px', flexShrink: 0 }} title="EventSub: действия">
+                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: ch.eventsub_actions ? '#00c878' : 'rgba(255,255,255,0.3)' }} />
+                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>действия</span>
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '3px', flexShrink: 0 }} title="EventSub: стрим">
+                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: ch.eventsub_stream ? '#00c878' : 'rgba(255,255,255,0.3)' }} />
+                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>стрим</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Top spammers + Top channels by messages ── */}

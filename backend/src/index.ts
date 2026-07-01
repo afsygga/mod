@@ -18,6 +18,7 @@ import { whitelistRouter } from './channels/whitelistRouter';
 import { moderationRouter } from './moderation/moderationRouter';
 import { settingsRouter } from './channels/settingsRouter';
 import { logsRouter } from './moderation/logsRouter';
+import { streamsRouter } from './moderation/streamsRouter';
 import { authRouter } from './auth/authRouter';
 import { twitchCredsRouter } from './auth/twitchCredsRouter';
 import { twitchOAuthRouter } from './auth/twitchOAuthRouter';
@@ -84,6 +85,7 @@ app.use('/api/whitelist', authenticate, whitelistRouter);
 app.use('/api/moderation', authenticate, moderationRouter);
 app.use('/api/settings', authenticate, settingsRouter);
 app.use('/api/logs', authenticate, logsRouter);
+app.use('/api/streams', authenticate, streamsRouter);
 
 wsHandler(wss);
 
@@ -246,5 +248,25 @@ async function start() {
     process.exit(1);
   }
 }
+
+// Graceful shutdown — close open stream sessions so nothing stays stuck "LIVE"
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`Received ${signal}, shutting down gracefully`);
+  const force = setTimeout(() => process.exit(0), 5000);
+  try {
+    await db.query("UPDATE stream_sessions SET ended_at = NOW() WHERE ended_at IS NULL");
+    logger.info('Closed open stream sessions');
+  } catch (err) {
+    logger.error('Shutdown cleanup failed', err);
+  } finally {
+    clearTimeout(force);
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => { shutdown('SIGTERM').catch(() => process.exit(0)); });
+process.on('SIGINT', () => { shutdown('SIGINT').catch(() => process.exit(0)); });
 
 start();

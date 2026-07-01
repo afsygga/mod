@@ -21,6 +21,29 @@ adminRouter.get('/online', async (_req: Request, res: Response) => {
   res.json({ count: byEmail.size, users: [...byEmail.values()] });
 });
 
+// Per-channel authorization + EventSub coverage status
+adminRouter.get('/channels/auth', async (_req: Request, res: Response) => {
+  try {
+    const tm: any = (global as any).twitchManager;
+    const es: any = (global as any).eventSubManager;
+    const channels: string[] = tm?.getChannelNames ? tm.getChannelNames() : [];
+    const { rows: bt } = await db.query('SELECT twitch_login FROM broadcaster_tokens');
+    const broadcasterSet = new Set<string>(bt.map((r: any) => r.twitch_login.toLowerCase()));
+    const status = es?.getStatus ? es.getStatus() : { moderate: [], stream: [] };
+    const moderateSet = new Set<string>(status.moderate);
+    const streamSet = new Set<string>(status.stream);
+    const result = channels.map((c: string) => ({
+      channel: c,
+      broadcaster_auth: broadcasterSet.has(c.toLowerCase()), // authorized via Twitch (/broadcaster)
+      eventsub_actions: moderateSet.has(c.toLowerCase()),     // full action tracking live
+      eventsub_stream: streamSet.has(c.toLowerCase()),        // stream start/end live
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'channel auth status failed' });
+  }
+});
+
 // ============================================================================
 // USERS
 // ============================================================================
@@ -494,8 +517,11 @@ adminRouter.get('/stats/live', async (_req: Request, res: Response) => {
   try {
     const [msgRate, recentActions, channelStatus, autoVsManual] = await Promise.all([
       db.query(`SELECT COUNT(*)::int AS c FROM messages WHERE created_at > NOW() - INTERVAL '5 minutes'`),
-      db.query(`SELECT action, performed_by, channel_name, target_username, created_at
-                FROM moderation_logs ORDER BY created_at DESC LIMIT 15`),
+      db.query(`SELECT ml.action, COALESCE(u.twitch_username, u.name, ml.performed_by) AS performed_by,
+                       ml.channel_name, ml.username AS target_username, ml.created_at
+                FROM moderation_logs ml
+                LEFT JOIN users u ON u.email = ml.performed_by
+                ORDER BY ml.created_at DESC LIMIT 15`),
       db.query(`SELECT name, status FROM channels ORDER BY name`),
       db.query(`SELECT
                   COUNT(*) FILTER (WHERE action='AUTO_MUTED')::int AS auto_mutes,

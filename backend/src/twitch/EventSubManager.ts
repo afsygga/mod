@@ -31,6 +31,10 @@ export class EventSubManager {
   private reconnectDelay = 2_000;
   private idCache = new Map<string, string>(); // login -> twitch user id
   private started = false;
+  /** channels where channel.moderate is active (full action tracking) */
+  private moderateChannels = new Set<string>();
+  /** channels where stream.online/offline is active */
+  private streamChannels = new Set<string>();
 
   constructor(wss: WebSocketServer) {
     this.wss = wss;
@@ -141,6 +145,8 @@ export class EventSubManager {
 
   private async subscribeAll(): Promise<void> {
     if (!this.sessionId) return;
+    this.moderateChannels.clear();
+    this.streamChannels.clear();
     const tm: any = (global as any).twitchManager;
     const channels: string[] = tm?.getChannelNames ? tm.getChannelNames() : [];
     if (channels.length === 0) return;
@@ -159,40 +165,41 @@ export class EventSubManager {
       const broadcasterId = await this.resolveId(ch, probeHeaders);
       if (!broadcasterId) continue;
 
-      // Try each moderator token until one subscription succeeds
+      // channel.moderate — full action tracking (needs a mod token with scopes)
       let ok = false;
       for (const mod of mods) {
-        const success = await this.subscribeChannel(broadcasterId, mod, clientId);
+        const success = await this.subscribe('channel.moderate', '2',
+          { broadcaster_user_id: broadcasterId, moderator_user_id: mod.userId }, mod.token, clientId);
         if (success) { ok = true; break; }
       }
-      if (!ok) logger.warn(`[eventsub] could not subscribe channel.moderate for ${ch} (no mod token has scopes/rights)`);
+      if (ok) this.moderateChannels.add(ch);
+      else logger.warn(`[eventsub] could not subscribe channel.moderate for ${ch} (no mod token has scopes/rights)`);
+
+      // stream.online / stream.offline — instant start/end detection (no scope needed)
+      const t = mods[0].token;
+      const onOk = await this.subscribe('stream.online', '1', { broadcaster_user_id: broadcasterId }, t, clientId);
+      const offOk = await this.subscribe('stream.offline', '1', { broadcaster_user_id: broadcasterId }, t, clientId);
+      if (onOk && offOk) this.streamChannels.add(ch);
     }
   }
 
-  private async subscribeChannel(broadcasterId: string, mod: ModToken, clientId: string): Promise<boolean> {
+  private async subscribe(type: string, version: string, condition: any, token: string, clientId: string): Promise<boolean> {
     try {
       const res = await fetch('https://api.twitch.tv/helix/eventsub/subscriptions', {
         method: 'POST',
         headers: {
           'Client-Id': clientId,
-          'Authorization': `Bearer ${mod.token}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          type: 'channel.moderate',
-          version: '2',
-          condition: { broadcaster_user_id: broadcasterId, moderator_user_id: mod.userId },
-          transport: { method: 'websocket', session_id: this.sessionId },
-        }),
+        body: JSON.stringify({ type, version, condition, transport: { method: 'websocket', session_id: this.sessionId } }),
       });
-      if (res.status === 202 || res.ok) {
-        logger.info(`[eventsub] subscribed channel.moderate broadcaster=${broadcasterId} via ${mod.login}`);
+      if (res.status === 202 || res.ok || res.status === 409) {
+        if (res.status !== 409) logger.info(`[eventsub] subscribed ${type} ${JSON.stringify(condition)}`);
         return true;
       }
       const body = await res.text().catch(() => '');
-      // 409 = already subscribed (treat as success); 403 = missing scope/not a mod (try next)
-      if (res.status === 409) return true;
-      logger.warn(`[eventsub] subscribe ${res.status} broadcaster=${broadcasterId} via ${mod.login}: ${body}`);
+      logger.warn(`[eventsub] subscribe ${type} ${res.status}: ${body}`);
       return false;
     } catch (err: any) {
       logger.error('[eventsub] subscribe threw', err?.message || err);
@@ -200,10 +207,29 @@ export class EventSubManager {
     }
   }
 
+  /** Which channels have active EventSub coverage (for admin status view). */
+  getStatus(): { moderate: string[]; stream: string[] } {
+    return { moderate: [...this.moderateChannels], stream: [...this.streamChannels] };
+  }
+
   private async handleNotification(payload: any): Promise<void> {
     const event = payload?.event;
     const subType = payload?.subscription?.type;
-    if (!event || subType !== 'channel.moderate') return;
+    if (!event) return;
+
+    // Instant stream start/end detection
+    if (subType === 'stream.online' || subType === 'stream.offline') {
+      const ch = (event.broadcaster_user_login || '').toLowerCase();
+      const tm: any = (global as any).twitchManager;
+      try { if (tm?.syncStreams) await tm.syncStreams(); } catch {}
+      broadcast(this.wss, {
+        type: subType === 'stream.online' ? 'stream_start' : 'stream_end',
+        channel: ch, ts: Date.now(),
+      });
+      return;
+    }
+
+    if (subType !== 'channel.moderate') return;
 
     const channel = (event.broadcaster_user_login || '').toLowerCase();
     const performedBy = event.moderator_user_login || 'unknown';

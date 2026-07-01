@@ -42,6 +42,20 @@ moderationRouter.post('/ban', async (req: Request, res: Response) => {
   }
 });
 
+// Unban / unmute — Twitch's unban removes both permanent bans and timeouts
+moderationRouter.post('/unban', async (req: Request, res: Response) => {
+  const { channel, username } = req.body;
+  if (!channel || !username) return res.status(400).json({ error: 'channel and username required' });
+  try {
+    const tm = (global as any).twitchManager;
+    if (tm) await tm.unbanUser(channel, username, req.user?.email || 'dashboard');
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('POST /moderation/unban error', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // In-memory avatar cache
 const avatarCache: Map<string, { data: any; ts: number }> = new Map();
 const AVATAR_TTL = 30 * 60 * 1000; // 30 min

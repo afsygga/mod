@@ -361,9 +361,9 @@ export default function App() {
             ['dashboard', t.dashboard, LayoutDashboard],
             ['logs', t.logs, ScrollText],
             ['settings', t.settings, SettingsIcon],
+            ['streams', 'Стримы', Radio] as const,
             ...(user.role === 'admin' ? [
               ['analytics', 'Аналитика', BarChart2] as const,
-              ['streams', 'Стримы', Radio] as const,
               ['admin', 'Admin', ShieldCheck] as const,
             ] : []),
           ] as const).map(([id, label, Icon]) => (
@@ -736,7 +736,7 @@ export default function App() {
         </div>
       )}
 
-      {tab === 'streams' && user.role === 'admin' && (
+      {tab === 'streams' && (
         <div style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
           <Analytics initialSection="streams" streamEventTick={streamEventTick} />
         </div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Search, Filter, RefreshCw, Tv2, User, AlertTriangle, Ban, Volume2, Trash2, RotateCcw, Zap } from 'lucide-react';
+import { Search, Filter, RefreshCw, Tv2, User, AlertTriangle, Ban, Volume2, Trash2, RotateCcw, Zap, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ModerationLog } from '../../types';
 import { api } from '../../hooks/useApi';
@@ -56,6 +56,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   const [confirmDelete, setConfirmDelete] = useState<{ id?: number; all?: boolean } | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [unbanning, setUnbanning] = useState<Record<number, 'loading' | 'done'>>({});
   const t = T[lang];
 
   const PAGE_SIZE = 500;
@@ -126,7 +127,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   }, [logs]);
 
   // Shared grid template so header + rows align
-  const GRID = '70px 95px 100px 130px 120px 50px minmax(120px,1fr) auto 50px 28px';
+  const GRID = '70px 95px 100px 130px 120px 50px minmax(120px,1fr) auto 50px 28px 28px';
 
   const handleDelete = async () => {
     if (!confirmDelete) return;
@@ -140,6 +141,18 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
       }
     } catch (err) { console.error(err); }
     setConfirmDelete(null);
+  };
+
+  const handleUnban = async (log: ModerationLog) => {
+    setUnbanning(prev => ({ ...prev, [log.id]: 'loading' }));
+    try {
+      await api.post('/api/moderation/unban', { channel: log.channel_name, username: log.username });
+      setUnbanning(prev => ({ ...prev, [log.id]: 'done' }));
+      loadLogs(true);
+    } catch (err) {
+      console.error(err);
+      setUnbanning(prev => { const n = { ...prev }; delete n[log.id]; return n; });
+    }
   };
 
   return (
@@ -299,6 +312,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
             <div>{lang === 'ru' ? 'Причины' : 'Reasons'}</div>
             <div>{lang === 'ru' ? 'Длит.' : 'Dur.'}</div>
             <div></div>
+            <div></div>
           </div>
         )}
 
@@ -451,6 +465,23 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
                   </span>
                 ) : <span style={{ color: 'rgba(255,255,255,0.2)' }}>—</span>}
               </div>
+
+              {/* Unban / Unmute — only for mute/ban actions */}
+              {(log.action === 'MUTED' || log.action === 'AUTO_MUTED' || log.action === 'BANNED') ? (
+                <button onClick={() => handleUnban(log)} disabled={!!unbanning[log.id]} title={lang === 'ru' ? 'Снять' : 'Unban / Unmute'} style={{
+                  padding: '4px', borderRadius: '6px', background: 'transparent',
+                  border: 'none', outline: 'none',
+                  cursor: unbanning[log.id] ? 'default' : 'pointer',
+                  opacity: unbanning[log.id] === 'done' ? 1 : 0.5,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                onMouseEnter={e => { if (!unbanning[log.id]) { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = 'rgba(0,200,120,0.15)'; } }}
+                onMouseLeave={e => { if (unbanning[log.id] !== 'done') { e.currentTarget.style.opacity = '0.5'; } e.currentTarget.style.background = 'transparent'; }}>
+                  {unbanning[log.id] === 'done'
+                    ? <Check size={11} style={{ color: '#00c878' }} />
+                    : <RotateCcw size={11} style={{ color: '#00c878' }} />}
+                </button>
+              ) : <div />}
 
               {/* Delete */}
               <button onClick={() => setConfirmDelete({ id: log.id })} style={{
