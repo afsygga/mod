@@ -5,7 +5,7 @@ import { db } from '../database/db';
 import { broadcast } from '../websocket/wsHandler';
 import { logger } from '../utils/logger';
 import { TelegramBot } from '../telegram/TelegramBot';
-import { refreshUserToken } from './twitchToken';
+import { refreshUserToken, refreshBroadcasterToken } from './twitchToken';
 
 interface UserConnection {
   email: string;
@@ -505,36 +505,56 @@ export class TwitchManager {
 
   private async setGame(channelName: string, gameName: string, ownerEmail: string | null): Promise<string> {
     try {
-      // Prefer broadcaster token if available
-      const { rows: btRows } = await db.query(
-        'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channelName]
-      );
       const clientId = process.env.TWITCH_CLIENT_ID || '';
-      const headers = btRows[0]?.access_token
-        ? { 'Client-Id': clientId, 'Authorization': `Bearer ${btRows[0].access_token}`, 'Content-Type': 'application/json' }
-        : await this.getHelixHeaders(ownerEmail);
-      // 1. Search for the game
-      const searchRes = await fetch(`https://api.twitch.tv/helix/games?name=${encodeURIComponent(gameName)}`, { headers });
-      const searchData: any = await searchRes.json();
-      const game = searchData.data?.[0];
+      // Search + id lookup use a reliable moderator token (refresh on 401)
+      let searchHeaders = await this.getHelixHeaders(ownerEmail);
+      const searchGame = async () => {
+        // Fuzzy category search (handles "Counter-Strike", "Just Chatting", etc.)
+        let r = await fetch(`https://api.twitch.tv/helix/search/categories?query=${encodeURIComponent(gameName)}&first=10`, { headers: searchHeaders });
+        if (r.status === 401 && ownerEmail) {
+          const fresh = await refreshUserToken(ownerEmail);
+          if (fresh) { searchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${fresh}`, 'Content-Type': 'application/json' }; r = await fetch(`https://api.twitch.tv/helix/search/categories?query=${encodeURIComponent(gameName)}&first=10`, { headers: searchHeaders }); }
+        }
+        if (!r.ok) return null;
+        const d: any = await r.json();
+        const list: any[] = d.data || [];
+        // Prefer exact (case-insensitive) match, else first result
+        return list.find(g => g.name.toLowerCase() === gameName.toLowerCase()) || list[0] || null;
+      };
+      const game = await searchGame();
       if (!game) return `Игра не найдена: ${gameName}`;
 
-      // 2. Get broadcaster_id
+      // broadcaster_id
       const { rows } = await db.query('SELECT twitch_id FROM twitch_user_meta WHERE username=$1', [channelName]);
       let broadcasterId: string = rows[0]?.twitch_id || '';
       if (!broadcasterId) {
-        const ur = await fetch(`https://api.twitch.tv/helix/users?login=${channelName}`, { headers });
+        const ur = await fetch(`https://api.twitch.tv/helix/users?login=${channelName}`, { headers: searchHeaders });
         const ud: any = await ur.json();
         broadcasterId = ud.data?.[0]?.id || '';
       }
       if (!broadcasterId) return 'Не удалось найти broadcaster_id';
 
-      // 3. Update channel
-      const patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ game_id: game.id }),
+      // Changing the category REQUIRES the broadcaster's own token
+      // (channel:manage:broadcast) — a moderator token can't do it.
+      const { rows: btRows } = await db.query(
+        'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channelName]
+      );
+      if (!btRows[0]?.access_token) {
+        return `Нужна авторизация стримера: пусть ${channelName} войдёт на afsyg.gay/broadcaster`;
+      }
+      let patchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${btRows[0].access_token}`, 'Content-Type': 'application/json' };
+      let patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
+        method: 'PATCH', headers: patchHeaders, body: JSON.stringify({ game_id: game.id }),
       });
+      if (patchRes.status === 401) {
+        const fresh = await refreshBroadcasterToken(channelName);
+        if (fresh) {
+          patchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${fresh}`, 'Content-Type': 'application/json' };
+          patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
+            method: 'PATCH', headers: patchHeaders, body: JSON.stringify({ game_id: game.id }),
+          });
+        }
+      }
       if (!patchRes.ok) {
         const err: any = await patchRes.json().catch(() => ({}));
         return `Ошибка: ${err?.message || patchRes.status}`;
