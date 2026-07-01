@@ -649,7 +649,8 @@ export class TwitchManager {
         ON CONFLICT (twitch_stream_id) WHERE twitch_stream_id IS NOT NULL DO UPDATE SET
           title = EXCLUDED.title,
           game = EXCLUDED.game,
-          peak_viewers = GREATEST(stream_sessions.peak_viewers, EXCLUDED.peak_viewers)
+          peak_viewers = GREATEST(stream_sessions.peak_viewers, EXCLUDED.peak_viewers),
+          ended_at = NULL
       `, [ch, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, stream.id]);
     }
 
