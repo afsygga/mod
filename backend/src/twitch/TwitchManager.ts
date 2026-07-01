@@ -626,7 +626,7 @@ export class TwitchManager {
       await db.query(`
         INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers, twitch_stream_id)
         VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (twitch_stream_id) DO UPDATE SET
+        ON CONFLICT (twitch_stream_id) WHERE twitch_stream_id IS NOT NULL DO UPDATE SET
           title = EXCLUDED.title,
           game = EXCLUDED.game,
           peak_viewers = GREATEST(stream_sessions.peak_viewers, EXCLUDED.peak_viewers)
