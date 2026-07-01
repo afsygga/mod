@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sliders, Clock, ShieldCheck, Tv2, MessageSquare, Save, Check, Volume2, ListChecks, Send } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { Channel, AppSettings } from '../../types';
 import { api } from '../../hooks/useApi';
 import { T, Lang } from '../../utils/i18n';
@@ -24,17 +25,17 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   return (
     <button onClick={() => onChange(!checked)}
       style={{
-        position: 'relative', width: '40px', height: '22px', borderRadius: '11px',
-        background: checked ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.06)',
-        border: checked ? '1px solid rgba(255,255,255,0.4)' : '1px solid rgba(255,255,255,0.1)',
+        position: 'relative', width: '42px', height: '24px', borderRadius: '12px',
+        background: checked ? 'rgba(0,200,120,0.28)' : 'rgba(255,255,255,0.06)',
+        border: checked ? '1px solid rgba(0,200,120,0.5)' : '1px solid rgba(255,255,255,0.1)',
         cursor: 'pointer', flexShrink: 0, transition: 'background 0.18s, border-color 0.18s',
       }}>
       <span style={{
         position: 'absolute', top: '2px',
         left: checked ? '20px' : '2px',
-        width: '16px', height: '16px', borderRadius: '50%',
-        background: checked ? '#ffffff' : 'rgba(255,255,255,0.35)',
-        boxShadow: checked ? '0 0 8px rgba(255,255,255,0.4)' : 'none',
+        width: '18px', height: '18px', borderRadius: '50%',
+        background: checked ? '#00e08a' : 'rgba(255,255,255,0.35)',
+        boxShadow: checked ? '0 0 10px rgba(0,200,120,0.5)' : 'none',
         transition: 'left 0.22s cubic-bezier(0.4,0,0.2,1), background 0.18s',
       }} />
     </button>
@@ -98,7 +99,7 @@ function Slider({ value, min, max, step = 1, onChange, color = '#ffffff' }: {
       ref={trackRef}
       onPointerDown={handleDown}
       style={{
-        position: 'relative', width: '180px', height: '24px',
+        position: 'relative', flex: 1, minWidth: 0, height: '24px',
         display: 'flex', alignItems: 'center', cursor: 'pointer',
         touchAction: 'none', userSelect: 'none',
       }}>
@@ -138,26 +139,31 @@ const SliderRow = React.memo(function SliderRow({ label, desc, value, min, max, 
   label: string; desc: string; value: number; min: number; max: number;
   onChange: (v: number) => void; color?: string; unit?: string;
 }) {
+  const c = color || '#ffffff';
   return (
-    <div style={{ padding: '16px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-        <div>
-          <div style={{ fontSize: '13px', fontWeight: 500, color: 'rgba(255,255,255,0.88)' }}>{label}</div>
-          <div style={{ fontSize: '11px', marginTop: '2px', color: 'rgba(255,255,255,0.34)' }}>{desc}</div>
+    <div style={{ padding: '18px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '14px' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: c, boxShadow: `0 0 8px ${c}80`, flexShrink: 0 }} />
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>{label}</div>
+          </div>
+          <div style={{ fontSize: '11px', marginTop: '4px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>{desc}</div>
         </div>
         <div style={{
-          fontSize: '15px', fontWeight: 700, minWidth: '46px', textAlign: 'center',
-          padding: '4px 10px', borderRadius: '8px',
-          background: 'rgba(255,255,255,0.05)',
-          color: '#ffffff',
-          border: '1px solid rgba(255,255,255,0.08)',
+          fontSize: '16px', fontWeight: 700, minWidth: '52px', textAlign: 'center',
+          padding: '6px 12px', borderRadius: '10px', flexShrink: 0,
+          background: `${c}14`,
+          color: c,
+          border: `1px solid ${c}33`,
+          fontVariantNumeric: 'tabular-nums',
         }}>
           {value}{unit || ''}
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
         <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', minWidth: '20px' }}>{min}</span>
-        <Slider value={value} min={min} max={max} onChange={onChange} color={color || '#ffffff'} />
+        <Slider value={value} min={min} max={max} onChange={onChange} color={c} />
         <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', minWidth: '20px' }}>{max}</span>
       </div>
     </div>
@@ -167,14 +173,20 @@ const SliderRow = React.memo(function SliderRow({ label, desc, value, min, max, 
 const ToggleRow = React.memo(function ToggleRow({ label, desc, checked, onChange }: { label: string; desc: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '14px 0', borderBottom: '1px solid rgba(255,255,255,0.05)',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px',
+      padding: '15px 0', borderBottom: '1px solid rgba(255,255,255,0.05)',
     }}>
-      <div>
-        <div style={{ fontSize: '13px', fontWeight: 500, color: 'rgba(255,255,255,0.88)' }}>{label}</div>
-        <div style={{ fontSize: '11px', marginTop: '2px', color: 'rgba(255,255,255,0.34)' }}>{desc}</div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>{label}</div>
+        <div style={{ fontSize: '11px', marginTop: '3px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>{desc}</div>
       </div>
-      <Toggle checked={checked} onChange={onChange} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+        <span style={{
+          fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em', width: '26px', textAlign: 'right',
+          color: checked ? '#00c878' : 'rgba(255,255,255,0.3)', transition: 'color 0.18s',
+        }}>{checked ? 'ON' : 'OFF'}</span>
+        <Toggle checked={checked} onChange={onChange} />
+      </div>
     </div>
   );
 });
@@ -219,16 +231,29 @@ const InputRow = React.memo(function InputRow({ label, desc, value, onChange, pl
   );
 });
 
-const Section = React.memo(function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+const Section = React.memo(function Section({ title, subtitle, icon: Icon, color = '#a070ff', children }: {
+  title: string; subtitle?: string; icon?: LucideIcon; color?: string; children: React.ReactNode;
+}) {
   return (
     <div style={{
-      padding: '20px 24px', marginBottom: '14px',
-      background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)',
+      padding: '22px 24px', marginBottom: '16px',
+      background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
       borderRadius: '16px',
     }}>
-      <div style={{ marginBottom: '6px', paddingBottom: '14px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <h3 style={{ fontSize: '14px', fontWeight: 600, color: 'rgba(255,255,255,0.92)', letterSpacing: '-0.005em' }}>{title}</h3>
-        {subtitle && <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '3px' }}>{subtitle}</p>}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '13px', marginBottom: '4px', paddingBottom: '16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        {Icon && (
+          <div style={{
+            width: '38px', height: '38px', borderRadius: '11px', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: `${color}18`, border: `1px solid ${color}33`,
+          }}>
+            <Icon size={18} style={{ color }} />
+          </div>
+        )}
+        <div style={{ paddingTop: Icon ? '2px' : 0 }}>
+          <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'rgba(255,255,255,0.92)', letterSpacing: '-0.01em' }}>{title}</h3>
+          {subtitle && <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '4px', lineHeight: 1.5 }}>{subtitle}</p>}
+        </div>
       </div>
       {children}
     </div>
@@ -251,6 +276,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [activeSection, setActiveSection] = useState('detection');
+  const contentRef = useRef<HTMLDivElement>(null);
   const t = T[lang];
 
   // Dirty = current differs from last-saved baseline
@@ -307,15 +333,33 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
   };
 
   const sections = [
-    { id: 'detection', icon: Sliders, label: lang === 'ru' ? 'Детекция' : 'Detection' },
-    { id: 'timing', icon: Clock, label: lang === 'ru' ? 'Время' : 'Timing' },
-    { id: 'automod', icon: ShieldCheck, label: lang === 'ru' ? 'Автомод' : 'AutoMod' },
-    { id: 'message', icon: MessageSquare, label: lang === 'ru' ? 'Сообщение' : 'Reason' },
-    { id: 'sounds', icon: Volume2, label: lang === 'ru' ? 'Звуки' : 'Sounds' },
-    { id: 'telegram', icon: Send, label: 'Telegram' },
-    { id: 'whitelist', icon: ListChecks, label: lang === 'ru' ? 'Whitelist' : 'Whitelist' },
-    { id: 'channels', icon: Tv2, label: lang === 'ru' ? 'Каналы' : 'Channels' },
+    { id: 'detection', icon: Sliders, color: '#ffc800', label: lang === 'ru' ? 'Детекция' : 'Detection' },
+    { id: 'timing', icon: Clock, color: '#a070ff', label: lang === 'ru' ? 'Время' : 'Timing' },
+    { id: 'automod', icon: ShieldCheck, color: '#00c878', label: lang === 'ru' ? 'Автомод' : 'AutoMod' },
+    { id: 'message', icon: MessageSquare, color: '#00e5cc', label: lang === 'ru' ? 'Сообщение' : 'Reason' },
+    { id: 'sounds', icon: Volume2, color: '#ffc800', label: lang === 'ru' ? 'Звуки' : 'Sounds' },
+    { id: 'telegram', icon: Send, color: '#7eaaff', label: 'Telegram' },
+    { id: 'whitelist', icon: ListChecks, color: '#00c878', label: lang === 'ru' ? 'Whitelist' : 'Whitelist' },
+    { id: 'channels', icon: Tv2, color: '#a070ff', label: lang === 'ru' ? 'Каналы' : 'Channels' },
   ];
+
+  // Scroll-spy: highlight the section currently in view
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!root) return;
+    const ids = sections.map(s => s.id);
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter(e => e.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible.length > 0) {
+        const id = visible[0].target.id.replace('sec-', '');
+        setActiveSection(id);
+      }
+    }, { root, rootMargin: '-10% 0px -70% 0px', threshold: 0 });
+    ids.forEach(id => { const el = document.getElementById(`sec-${id}`); if (el) observer.observe(el); });
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channels.length]);
 
   return (
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -333,7 +377,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
           color: 'rgba(255,255,255,0.3)',
         }}>{lang === 'ru' ? 'Разделы' : 'Sections'}</div>
 
-        {sections.map(({ id, icon: Icon, label }) => {
+        {sections.map(({ id, icon: Icon, label, color }) => {
           const active = activeSection === id;
           return (
             <button key={id} onClick={() => {
@@ -341,17 +385,19 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
               document.getElementById(`sec-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }}
               style={{
-                display: 'flex', alignItems: 'center', gap: '10px',
-                width: '100%', padding: '9px 12px', marginBottom: '3px',
+                position: 'relative',
+                display: 'flex', alignItems: 'center', gap: '11px',
+                width: '100%', padding: '10px 12px', marginBottom: '3px',
                 borderRadius: '10px', cursor: 'pointer',
-                background: active ? 'rgba(255,255,255,0.06)' : 'transparent',
-                border: active ? '1px solid rgba(255,255,255,0.1)' : '1px solid transparent',
+                background: active ? `${color}18` : 'transparent',
+                border: active ? `1px solid ${color}33` : '1px solid transparent',
                 color: active ? '#ffffff' : 'rgba(255,255,255,0.5)',
-                fontSize: '13px', fontWeight: 500, textAlign: 'left',
+                fontSize: '13px', fontWeight: active ? 600 : 500, textAlign: 'left',
+                transition: 'background 0.15s, color 0.15s, border-color 0.15s',
               }}
               onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-              <Icon size={14} />
+              <Icon size={15} style={{ color: active ? color : 'rgba(255,255,255,0.4)', flexShrink: 0 }} />
               {label}
             </button>
           );
@@ -359,11 +405,11 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
       </div>
 
       {/* Settings content */}
-      <div className="settings-content" style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '14px 16px' : '24px 32px' }}>
+      <div ref={contentRef} className="settings-content" style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '14px 16px' : '24px 32px' }}>
         <div style={{ maxWidth: '720px', margin: '0 auto', paddingBottom: '80px' }}>
 
           <div id="sec-detection">
-            <Section title={lang === 'ru' ? 'Движок обнаружения спама' : 'Spam Detection Engine'}
+            <Section icon={Sliders} color="#ffc800" title={lang === 'ru' ? 'Движок обнаружения спама' : 'Spam Detection Engine'}
               subtitle={lang === 'ru'
                 ? 'Каждое сообщение получает оценку 0–100. Чем выше score, тем выше вероятность спама.'
                 : 'Each message gets a 0–100 score. Higher score means higher spam probability.'}>
@@ -395,7 +441,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
           </div>
 
           <div id="sec-timing">
-            <Section title={lang === 'ru' ? 'Окна времени' : 'Time Windows'}
+            <Section icon={Clock} color="#a070ff" title={lang === 'ru' ? 'Окна времени' : 'Time Windows'}
               subtitle={lang === 'ru' ? 'Период анализа и длительность мута' : 'Analysis period and mute duration'}>
               <SelectRow label={t.memoryDuration} desc={t.memoryDurationDesc} value={s.mem_window_seconds}
                 options={[
@@ -420,7 +466,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
           </div>
 
           <div id="sec-automod">
-            <Section title={lang === 'ru' ? 'Автоматическая модерация' : 'Auto Moderation'}
+            <Section icon={ShieldCheck} color="#00c878" title={lang === 'ru' ? 'Автоматическая модерация' : 'Auto Moderation'}
               subtitle={lang === 'ru' ? 'Управление автоматическими действиями' : 'Control automatic actions'}>
               <ToggleRow label={t.autoMode} desc={t.autoModeDesc} checked={s.auto_mode} onChange={getUpdater('auto_mode')} />
               <ToggleRow label={t.linkDetection} desc={t.linkDetectionDesc} checked={s.link_detection} onChange={getUpdater('link_detection')} />
@@ -429,40 +475,58 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
           </div>
 
           <div id="sec-message">
-            <Section title={lang === 'ru' ? 'Причина мута' : 'Mute Reason'}
+            <Section icon={MessageSquare} color="#00e5cc" title={lang === 'ru' ? 'Причина мута' : 'Mute Reason'}
               subtitle={lang === 'ru' ? 'Текст, который будет отображаться при муте' : 'Text shown when muting users'}>
               <InputRow label={lang === 'ru' ? 'Причина' : 'Reason'}
                 desc={lang === 'ru' ? 'Отображается в карточке после мута' : 'Shown in card after muting'}
                 value={muteReason} onChange={setMuteReason}
                 placeholder={lang === 'ru' ? 'Например: Не спамить.' : 'e.g. Don\'t spam.'} />
-              <div style={{ padding: '14px 0', fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>
-                <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.55)' }}>{lang === 'ru' ? 'Предпросмотр:' : 'Preview:'}</span>
-                <span style={{
-                  display: 'inline-block', marginLeft: '10px',
-                  fontSize: '11px', padding: '4px 10px', borderRadius: '999px',
-                  background: 'rgba(0,200,120,0.08)', color: '#00c878',
-                  border: '1px solid rgba(0,200,120,0.2)', fontWeight: 500,
-                }}>{muteReason || (lang === 'ru' ? '(без причины)' : '(no reason)')}</span>
+              <div style={{ paddingTop: '16px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.55)', marginBottom: '9px' }}>
+                  {lang === 'ru' ? 'Предпросмотр:' : 'Preview:'}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                  <div style={{
+                    width: '30px', height: '30px', borderRadius: '50%', flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'rgba(0,229,204,0.15)', border: '1px solid rgba(0,229,204,0.3)',
+                    color: '#00e5cc', fontSize: '13px', fontWeight: 700,
+                  }}>M</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#00e5cc', marginBottom: '3px' }}>
+                      ModBot <span style={{ color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>· mod</span>
+                    </div>
+                    <div style={{
+                      display: 'inline-block',
+                      fontSize: '12.5px', padding: '8px 13px',
+                      borderRadius: '4px 13px 13px 13px', lineHeight: 1.45,
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      color: muteReason ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.35)',
+                      fontStyle: muteReason ? 'normal' : 'italic',
+                    }}>{muteReason || (lang === 'ru' ? '(без причины)' : '(no reason)')}</div>
+                  </div>
+                </div>
               </div>
             </Section>
           </div>
 
           <div id="sec-sounds">
-            <Section title={lang === 'ru' ? 'Звуковые уведомления' : 'Sound notifications'}
+            <Section icon={Volume2} color="#ffc800" title={lang === 'ru' ? 'Звуковые уведомления' : 'Sound notifications'}
               subtitle={lang === 'ru' ? 'Реагирует когда новый спамер попадает в очередь' : 'Plays when new spammer enters queue'}>
               <SoundSettings lang={lang} />
             </Section>
           </div>
 
           <div id="sec-telegram">
-            <Section title={lang === 'ru' ? 'Telegram бот' : 'Telegram bot'}
+            <Section icon={Send} color="#7eaaff" title={lang === 'ru' ? 'Telegram бот' : 'Telegram bot'}
               subtitle={lang === 'ru' ? 'Управляй модерацией со смартфона' : 'Manage moderation from your phone'}>
               <TelegramSettings lang={lang} />
             </Section>
           </div>
 
           <div id="sec-whitelist">
-            <Section title={lang === 'ru' ? 'Whitelist фраз' : 'Whitelist phrases'}
+            <Section icon={ListChecks} color="#00c878" title={lang === 'ru' ? 'Whitelist фраз' : 'Whitelist phrases'}
               subtitle={lang === 'ru' ? 'Фразы которые НЕ считаются спамом (per-channel)' : 'Phrases that won\'t be flagged as spam (per-channel)'}>
               <WhitelistSettings channels={channels} lang={lang} />
             </Section>
@@ -470,7 +534,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
 
           {channels.length > 0 && (
             <div id="sec-channels">
-              <Section title={lang === 'ru' ? 'Настройки каналов' : 'Channel Settings'}
+              <Section icon={Tv2} color="#a070ff" title={lang === 'ru' ? 'Настройки каналов' : 'Channel Settings'}
                 subtitle={lang === 'ru' ? 'Авто-модерация для каждого канала' : 'Auto-moderation for each channel'}>
                 {channels.map(ch => (
                   <ToggleRow key={ch.name} label={`📺 ${ch.name}`} desc={`${t.status}: ${ch.status}`}
@@ -494,23 +558,42 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
               exit={{ y: 80, opacity: 0 }}
               transition={{ type: 'spring', stiffness: 320, damping: 28 }}
               style={{
-                position: 'fixed', bottom: 0, left: '180px', right: 0,
-                padding: '16px 32px 20px',
-                background: 'linear-gradient(to top, rgba(5,5,8,0.98) 40%, rgba(5,5,8,0.85) 70%, transparent)',
+                position: 'fixed', bottom: 0, left: isMobile ? 0 : '180px', right: 0,
+                padding: isMobile ? '14px 16px 18px' : '18px 32px 22px',
+                background: 'linear-gradient(to top, rgba(5,5,8,0.98) 45%, rgba(5,5,8,0.85) 72%, transparent)',
                 pointerEvents: 'none',
                 zIndex: 10,
               }}>
-              <div style={{ maxWidth: '720px', margin: '0 auto', display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
+              <div style={{
+                maxWidth: '720px', margin: '0 auto',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px',
+                padding: '10px 12px 10px 18px', borderRadius: '14px',
+                background: 'rgba(20,20,26,0.85)', border: '1px solid rgba(255,255,255,0.08)',
+                boxShadow: '0 8px 28px rgba(0,0,0,0.5)', pointerEvents: 'auto',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
+                  <span style={{
+                    width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                    background: saved ? '#00c878' : '#ffc800',
+                    boxShadow: `0 0 8px ${saved ? '#00c878' : '#ffc800'}`,
+                  }} />
+                  <span style={{ fontSize: '12.5px', fontWeight: 500, color: 'rgba(255,255,255,0.75)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {saved
+                      ? (lang === 'ru' ? 'Настройки сохранены' : 'Settings saved')
+                      : (lang === 'ru' ? 'Есть несохранённые изменения' : 'You have unsaved changes')}
+                  </span>
+                </div>
                 <button onClick={handleSave} disabled={saving}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    padding: '12px 24px', borderRadius: '12px',
-                    fontSize: '13px', fontWeight: 600, cursor: saving ? 'default' : 'pointer',
-                    background: saved ? 'rgba(0,200,120,0.18)' : 'rgba(255,255,255,0.08)',
+                    display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0,
+                    padding: '11px 22px', borderRadius: '11px',
+                    fontSize: '13px', fontWeight: 700, cursor: saving ? 'default' : 'pointer',
+                    background: saved ? 'rgba(0,200,120,0.18)' : 'rgba(160,112,255,0.9)',
                     color: saved ? '#00c878' : '#ffffff',
-                    border: 'none', outline: 'none',
+                    border: saved ? '1px solid rgba(0,200,120,0.4)' : 'none', outline: 'none',
                     opacity: saving ? 0.6 : 1,
-                    boxShadow: saved ? '0 0 20px rgba(0,200,120,0.2)' : '0 4px 18px rgba(0,0,0,0.4)',
+                    boxShadow: saved ? '0 0 20px rgba(0,200,120,0.2)' : '0 4px 16px rgba(160,112,255,0.35)',
+                    transition: 'background 0.2s',
                   }}>
                   {saved ? <Check size={14} /> : <Save size={14} />}
                   {saving ? t.saving : saved ? t.saved : t.saveSettings}
