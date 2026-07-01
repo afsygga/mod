@@ -294,10 +294,12 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
       }
     }
 
-    // 4. Get action counts per twitch_username for this channel
+    // 4. Get action counts per twitch login for this channel.
+    // performed_by is either a site email (→ resolve to u.twitch_username) or,
+    // for EventSub-captured external mods, already a Twitch login.
     const { rows: actionRows } = await db.query(`
       SELECT
-        LOWER(u.twitch_username) AS twitch_login,
+        LOWER(COALESCE(u.twitch_username, ml.performed_by)) AS twitch_login,
         COUNT(*) FILTER (WHERE ml.action='MUTED')::int AS mutes,
         COUNT(*) FILTER (WHERE ml.action='AUTO_MUTED')::int AS auto_mutes,
         COUNT(*) FILTER (WHERE ml.action='BANNED')::int AS bans,
@@ -305,9 +307,9 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
         COUNT(*)::int AS total,
         MAX(ml.created_at) AS last_action
       FROM moderation_logs ml
-      JOIN users u ON u.email = ml.performed_by
-      WHERE ml.channel_name = $1 AND u.twitch_username IS NOT NULL
-      GROUP BY LOWER(u.twitch_username)
+      LEFT JOIN users u ON u.email = ml.performed_by
+      WHERE ml.channel_name = $1 AND ml.performed_by NOT IN ('AUTO','console','bulk','dashboard')
+      GROUP BY LOWER(COALESCE(u.twitch_username, ml.performed_by))
     `, [channel]);
 
     const actionMap: Record<string, any> = {};
@@ -348,11 +350,13 @@ adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {
       ? `AND ml.channel_name = $${params.push(channel)}`
       : '';
 
+    // performed_by is a site email (site actions) or a Twitch login (EventSub).
+    // Resolve a Twitch login for every actor so the UI never shows a raw email.
     const { rows } = await db.query(`
       SELECT
         ml.performed_by,
         u.name AS display_name,
-        u.twitch_username,
+        COALESCE(u.twitch_username, ml.performed_by) AS twitch_username,
         tm.profile_image_url AS twitch_avatar,
         tm.display_name AS twitch_display_name,
         COUNT(*) FILTER (WHERE ml.action='MUTED')::int AS mutes,
@@ -363,8 +367,8 @@ adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {
         MAX(ml.created_at) AS last_action
       FROM moderation_logs ml
       LEFT JOIN users u ON u.email = ml.performed_by
-      LEFT JOIN twitch_user_meta tm ON tm.username = LOWER(u.twitch_username)
-      WHERE ml.performed_by NOT IN ('AUTO', 'console') ${channelFilter}
+      LEFT JOIN twitch_user_meta tm ON tm.username = LOWER(COALESCE(u.twitch_username, ml.performed_by))
+      WHERE ml.performed_by NOT IN ('AUTO', 'console', 'bulk', 'dashboard') ${channelFilter}
       GROUP BY ml.performed_by, u.name, u.twitch_username, tm.profile_image_url, tm.display_name
       ORDER BY total DESC
       LIMIT 50

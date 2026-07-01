@@ -245,6 +245,15 @@ export class EventSubManager {
 
     if (!logAction || !target) return;
 
+    // Normalize performed_by to the site email when the moderator is a known
+    // site user, so it joins with users.email everywhere (stats, logs display).
+    // External mods (not on the site) keep their Twitch login.
+    let performedByStored = performedBy;
+    try {
+      const { rows } = await db.query('SELECT email FROM users WHERE LOWER(twitch_username)=LOWER($1)', [performedBy]);
+      if (rows[0]?.email) performedByStored = rows[0].email;
+    } catch {}
+
     // Dedup: skip if the site already logged this exact action moments ago
     const { rows: dup } = await db.query(
       `SELECT 1 FROM moderation_logs
@@ -256,7 +265,7 @@ export class EventSubManager {
 
     await db.query(
       'INSERT INTO moderation_logs (channel_name, username, action, performed_by, duration_seconds, message) VALUES ($1,$2,$3,$4,$5,$6)',
-      [channel, target, logAction, performedBy, durationSeconds, message]
+      [channel, target, logAction, performedByStored, durationSeconds, message]
     ).catch(err => logger.error('[eventsub] insert log failed', err));
 
     broadcast(this.wss, {
