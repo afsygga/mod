@@ -145,6 +145,17 @@ async function runMigrations() {
       )
     `);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_twitch_meta_created ON twitch_user_meta(account_created_at)`);
+    // Admin audit log
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS admin_audit (
+        id SERIAL PRIMARY KEY,
+        admin_email VARCHAR(255) NOT NULL,
+        action VARCHAR(64) NOT NULL,
+        detail TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit(created_at DESC)`);
     // Migrate hard-coded default reason → empty if still set to old default
     await db.query(
       "UPDATE settings SET value='' WHERE key='mute_reason' AND value='Spam detected by TwitchMod'"

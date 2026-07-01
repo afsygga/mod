@@ -44,6 +44,26 @@ streamsRouter.get('/heatmap', async (req: Request, res: Response) => {
   }
 });
 
+// Hour × day-of-week activity heatmap (MSK), last 30 days
+streamsRouter.get('/hourly-heatmap', async (req: Request, res: Response) => {
+  try {
+    const channel = (req.query.channel as string) || null;
+    const { rows } = await db.query(`
+      SELECT
+        EXTRACT(DOW FROM created_at AT TIME ZONE 'Europe/Moscow')::int AS dow,
+        EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int AS hour,
+        COUNT(*)::int AS c
+      FROM messages
+      WHERE created_at > NOW() - INTERVAL '30 days'
+        AND ($1::text IS NULL OR channel_name = $1)
+      GROUP BY dow, hour
+    `, [channel]);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'hourly heatmap failed' });
+  }
+});
+
 // Heatmap detail — stream info for a specific day
 streamsRouter.get('/heatmap-detail', async (req: Request, res: Response) => {
   try {

@@ -12,6 +12,7 @@ import { LoginPage } from './components/Auth/LoginPage';
 import { SuccessAnimation } from './components/Auth/SuccessAnimation';
 import { TwitchSetup } from './components/Auth/TwitchSetup';
 import { AdminPanel } from './components/Admin/AdminPanel';
+import { PatchNotes, PATCHNOTES_KEY } from './components/PatchNotes/PatchNotes';
 import { Analytics } from './components/Analytics/Analytics';
 import { useAuth } from './hooks/useAuth';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -60,6 +61,7 @@ export default function App() {
     () => localStorage.getItem('twitch_connected') === 'true'
   );
   const [showSuccess, setShowSuccess] = useState(false);
+  const [showPatchNotes, setShowPatchNotes] = useState(false);
   const [oauthMsg, setOauthMsg] = useState<string | null>(() => {
     const p = new URLSearchParams(window.location.search);
     if (p.get('twitch_connected')) {
@@ -186,6 +188,11 @@ export default function App() {
   useEffect(() => {
     setIdentify(user ? { type: 'identify', email: user.email, name: user.name, picture: user.picture } : null);
   }, [user, setIdentify]);
+
+  // One-time patch notes on first visit after login
+  useEffect(() => {
+    if (user && !localStorage.getItem(PATCHNOTES_KEY)) setShowPatchNotes(true);
+  }, [user]);
 
   // Detect login transition (null → user) to trigger success animation
   // Only trigger AFTER initial auth check completes (so F5 with existing session doesn't show it)
@@ -757,6 +764,10 @@ export default function App() {
           onClose={() => setTwitchSetupOpen(false)}
           onDone={() => { setTwitchSetupOpen(false); localStorage.setItem('twitch_connected', 'true'); setTwitchConnected(true); }}
         />
+      )}
+
+      {showPatchNotes && (
+        <PatchNotes onClose={() => { localStorage.setItem(PATCHNOTES_KEY, '1'); setShowPatchNotes(false); }} />
       )}
 
       <AnimatePresence>

@@ -1125,12 +1125,15 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const [modsError, setModsError] = useState<string | null>(null);
   const [init, setInit] = useState(false);
   const [heatmap, setHeatmap] = useState<{ day: string; count: number }[]>([]);
+  const [hourlyHeatmap, setHourlyHeatmap] = useState<{ dow: number; hour: number; c: number }[]>([]);
+  const [hourCell, setHourCell] = useState<{ x: number; y: number; label: string } | null>(null);
   const [selectedMod, setSelectedMod] = useState<{ mod: TwitchMod; rank: number } | null>(null);
   const [heatmapTooltip, setHeatmapTooltip] = useState<HeatmapTooltip | null>(null);
   const heatmapTooltipCache = useRef<Record<string, any>>({});
 
   useEffect(() => {
     api.get<{ day: string; count: number }[]>('/api/streams/heatmap').then(setHeatmap).catch(() => {});
+    api.get<{ dow: number; hour: number; c: number }[]>('/api/streams/hourly-heatmap').then(setHourlyHeatmap).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1530,6 +1533,71 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                         </div>
                       )}
                     </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Hour × Day-of-week heatmap */}
+            {hourlyHeatmap.length > 0 && (() => {
+              // Postgres dow: 0=Sun..6=Sat. Display rows Mon..Sun.
+              const dowOrder = [1, 2, 3, 4, 5, 6, 0];
+              const rowLabels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+              const grid: number[][] = dowOrder.map(() => new Array(24).fill(0));
+              let maxC = 1;
+              hourlyHeatmap.forEach(({ dow, hour, c }) => {
+                const rowIdx = dowOrder.indexOf(dow);
+                if (rowIdx >= 0 && hour >= 0 && hour < 24) {
+                  grid[rowIdx][hour] = c;
+                  if (c > maxC) maxC = c;
+                }
+              });
+              const CELL = 15, GAP = 3, LEFT = 26, TOP = 16;
+              const w = LEFT + 24 * (CELL + GAP);
+              const h = TOP + 7 * (CELL + GAP) + 12;
+              return (
+                <div style={{ marginBottom: '24px', padding: '18px 20px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', position: 'relative' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '14px' }}>
+                    Активность: час × день
+                  </div>
+                  <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', maxWidth: `${w}px`, height: 'auto', display: 'block', overflow: 'visible' }}
+                    onMouseLeave={() => setHourCell(null)}>
+                    {/* Hour column labels */}
+                    {[0, 6, 12, 18, 23].map(hr => (
+                      <text key={hr} x={LEFT + hr * (CELL + GAP) + CELL / 2} y={10} textAnchor="middle"
+                        style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.3)', fontFamily: 'Inter,sans-serif' }}>{hr}</text>
+                    ))}
+                    {/* Row labels */}
+                    {rowLabels.map((label, row) => (
+                      <text key={label} x={0} y={TOP + row * (CELL + GAP) + CELL - 3}
+                        style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.25)', fontFamily: 'Inter,sans-serif' }}>{label}</text>
+                    ))}
+                    {/* Cells */}
+                    {grid.map((rowArr, row) =>
+                      rowArr.map((count, hour) => {
+                        const opacity = count === 0 ? 0.06 : 0.08 + (count / maxC) * 0.82;
+                        return (
+                          <rect key={`${row}-${hour}`}
+                            x={LEFT + hour * (CELL + GAP)} y={TOP + row * (CELL + GAP)}
+                            width={CELL} height={CELL} rx={2} ry={2}
+                            fill={`rgba(0,200,120,${opacity.toFixed(2)})`}
+                            style={{ cursor: 'default' }}
+                            onMouseEnter={e => {
+                              const rect = (e.currentTarget as SVGRectElement).getBoundingClientRect();
+                              setHourCell({ x: rect.left + rect.width / 2, y: rect.top, label: `${rowLabels[row]} ${String(hour).padStart(2, '0')}:00 — ${count.toLocaleString()} сообщений` });
+                            }}
+                          />
+                        );
+                      })
+                    )}
+                  </svg>
+                  {hourCell && (
+                    <div style={{
+                      position: 'fixed', left: hourCell.x + 8, top: hourCell.y - 10, zIndex: 9998,
+                      background: 'rgba(12,12,18,0.98)', border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '10px', padding: '8px 12px', pointerEvents: 'none',
+                      fontSize: '11px', color: '#00c878', fontWeight: 600, whiteSpace: 'nowrap',
+                    }}>{hourCell.label}</div>
                   )}
                 </div>
               );

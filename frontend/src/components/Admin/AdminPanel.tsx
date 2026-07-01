@@ -3,11 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users, Mail, Tv2, Activity, BarChart3, Trash2, Shield, ShieldOff,
   UserPlus, Search, Crown, X, Plus, TrendingUp, MessageSquare, Zap,
-  VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown, Circle, Clock, Wifi, ShieldCheck,
+  VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown, Circle, Clock, Wifi, ShieldCheck, ScrollText,
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
-type Tab = 'overview' | 'users' | 'whitelist' | 'channels' | 'logs' | 'bans';
+type Tab = 'overview' | 'users' | 'whitelist' | 'channels' | 'logs' | 'bans' | 'audit';
 
 interface AdminUser {
   id: number; email: string; name: string | null; picture: string | null;
@@ -41,6 +41,7 @@ export function AdminPanel() {
           ['channels', Tv2, 'Все каналы'],
           ['bans', Ban, 'Баны'],
           ['logs', Activity, 'Все логи'],
+          ['audit', ScrollText, 'Аудит'],
         ] as const).map(([id, Icon, label]) => {
           const active = tab === id;
           return (
@@ -69,6 +70,7 @@ export function AdminPanel() {
         {tab === 'channels' && <ChannelsTab />}
         {tab === 'bans' && <BansTab />}
         {tab === 'logs' && <LogsTab />}
+        {tab === 'audit' && <AuditTab />}
       </div>
     </div>
   );
@@ -1129,6 +1131,75 @@ function LogsTab() {
             <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>{l.performed_by}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// AUDIT — admin/settings mutation log
+// ============================================================================
+interface AuditRow { id: number; admin_email: string; action: string; detail: string | null; created_at: string; }
+
+const AUDIT_ACTION_COLORS: Record<string, string> = {
+  settings_update: '#a070ff',
+  user_update:     '#5b9eff',
+  whitelist_add:   '#00c878',
+  whitelist_remove:'#ff5959',
+  channel_add:     '#00e5cc',
+  channel_remove:  '#ff9800',
+  streams_clear:   '#ffc800',
+};
+
+function AuditTab() {
+  const [rows, setRows] = useState<AuditRow[]>([]);
+
+  const load = () => api.get<AuditRow[]>('/api/admin/audit').then(setRows).catch(console.error);
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div>
+      <h2 style={{ fontSize: '22px', fontWeight: 700, marginBottom: '4px' }}>Аудит</h2>
+      <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>
+        Действия администраторов и изменения настроек · авто-обновление 15с
+      </p>
+
+      <div style={{
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+        borderRadius: '14px', overflow: 'hidden',
+      }}>
+        {rows.length === 0 ? (
+          <div style={{ padding: '32px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Нет записей</div>
+        ) : rows.map(r => {
+          const d = new Date(r.created_at);
+          const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')} ${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+          const color = AUDIT_ACTION_COLORS[r.action] || '#a070ff';
+          return (
+            <div key={r.id} style={{
+              display: 'flex', alignItems: 'center', gap: '10px',
+              padding: '8px 16px', borderBottom: '1px solid rgba(255,255,255,0.03)',
+              fontSize: '12px',
+            }}>
+              <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', minWidth: '118px' }}>
+                {time}
+              </span>
+              <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)', minWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.admin_email}
+              </span>
+              <span style={{
+                fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px',
+                background: `${color}1e`, color, whiteSpace: 'nowrap',
+              }}>{r.action}</span>
+              <span style={{ flex: 1, color: 'rgba(255,255,255,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.detail || '—'}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

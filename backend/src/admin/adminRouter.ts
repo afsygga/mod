@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
 import { authenticate, requireAdmin } from '../auth/authMiddleware';
 import { getOnlineUsers } from '../websocket/wsHandler';
+import { recordAudit } from '../utils/audit';
 
 export const adminRouter = Router();
 
@@ -66,6 +67,7 @@ adminRouter.patch('/users/:id', async (req: Request, res: Response) => {
   if (sets.length === 0) return res.status(400).json({ error: 'nothing to update' });
   params.push(id);
   await db.query(`UPDATE users SET ${sets.join(',')} WHERE id=$${params.length}`, params);
+  recordAudit(req.user?.email || 'unknown', 'user_update', `id=${id} ${JSON.stringify({ role, enabled })}`);
   res.json({ success: true });
 });
 
@@ -92,12 +94,14 @@ adminRouter.post('/whitelist', async (req: Request, res: Response) => {
     `INSERT INTO whitelist (email, added_by, note) VALUES ($1,$2,$3) ON CONFLICT (email) DO UPDATE SET note=$3`,
     [clean, req.user?.email || 'admin', note || null]
   );
+  recordAudit(req.user?.email || 'unknown', 'whitelist_add', clean);
   res.json({ success: true });
 });
 
 adminRouter.delete('/whitelist/:id', async (req: Request, res: Response) => {
   const id = parseInt(req.params.id);
   await db.query('DELETE FROM whitelist WHERE id=$1', [id]);
+  recordAudit(req.user?.email || 'unknown', 'whitelist_remove', `id=${id}`);
   res.json({ success: true });
 });
 
@@ -117,6 +121,7 @@ adminRouter.delete('/channels/:name', async (req: Request, res: Response) => {
   const tm = (global as any).twitchManager;
   if (tm) await tm.leaveChannel(req.params.name).catch(() => {});
   await db.query('DELETE FROM channels WHERE name=$1', [req.params.name]);
+  recordAudit(req.user?.email || 'unknown', 'channel_remove', req.params.name);
   res.json({ success: true });
 });
 
@@ -421,12 +426,13 @@ adminRouter.post('/streams/sync', async (_req: Request, res: Response) => {
 });
 
 // Clear all stream sessions
-adminRouter.delete('/streams', async (_req: Request, res: Response) => {
+adminRouter.delete('/streams', async (req: Request, res: Response) => {
   try {
     await db.query('TRUNCATE stream_sessions RESTART IDENTITY');
     // Also reset in-memory poller state
     const tm = (global as any).twitchManager;
     if (tm?.liveStreamIds) tm.liveStreamIds.clear();
+    recordAudit(req.user?.email || 'unknown', 'streams_clear');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'clear failed' });
@@ -706,6 +712,38 @@ adminRouter.get('/moderators/:username/profile', async (req: Request, res: Respo
     });
   } catch (err) {
     res.status(500).json({ error: 'moderator profile failed' });
+  }
+});
+
+// Admin audit log — recent admin/settings mutations
+adminRouter.get('/audit', async (_req: Request, res: Response) => {
+  try {
+    const { rows } = await db.query(
+      'SELECT * FROM admin_audit ORDER BY created_at DESC LIMIT 200'
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'audit failed' });
+  }
+});
+
+// Hour × day-of-week activity heatmap (MSK), last 30 days
+adminRouter.get('/stats/hourly-heatmap', async (req: Request, res: Response) => {
+  try {
+    const channel = (req.query.channel as string) || null;
+    const { rows } = await db.query(`
+      SELECT
+        EXTRACT(DOW FROM created_at AT TIME ZONE 'Europe/Moscow')::int AS dow,
+        EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int AS hour,
+        COUNT(*)::int AS c
+      FROM messages
+      WHERE created_at > NOW() - INTERVAL '30 days'
+        AND ($1::text IS NULL OR channel_name = $1)
+      GROUP BY dow, hour
+    `, [channel]);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'hourly heatmap failed' });
   }
 });
 

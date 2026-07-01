@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Search, Filter, RefreshCw, Tv2, User, AlertTriangle, Ban, Volume2, Trash2, RotateCcw, Zap, Check } from 'lucide-react';
+import { Search, Filter, RefreshCw, Tv2, User, AlertTriangle, Ban, Volume2, Trash2, RotateCcw, Zap, Check, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ModerationLog } from '../../types';
 import { api } from '../../hooks/useApi';
@@ -111,6 +111,46 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
       return true;
     });
   }, [logs, search, actionFilter, channelFilter, dateFilter]);
+
+  const exportTxt = () => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fmt = (iso: string) => {
+      const d = new Date(iso);
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+    const now = new Date();
+    const filters: string[] = [];
+    if (search.trim()) filters.push(`поиск="${search.trim()}"`);
+    filters.push(`действие=${actionFilter}`);
+    filters.push(`канал=${channelFilter}`);
+    filters.push(`период=${dateFilter}`);
+
+    const header = [
+      '=== Экспорт логов модерации ===',
+      `Дата экспорта: ${fmt(now.toISOString())}`,
+      `Фильтры: ${filters.join(', ')}`,
+      `Всего записей: ${filtered.length}`,
+      '='.repeat(40),
+      '',
+    ].join('\n');
+
+    const body = filtered.map(l => {
+      const moderator = l.performed_by_display || l.performed_by || '—';
+      const reasons = (l.reasons && l.reasons.length > 0) ? l.reasons.join('; ') : '—';
+      return `[${fmt(l.created_at)}] ${l.action} | ${l.channel_name} | ${l.username} | mod: ${moderator} | score ${l.spam_score ?? 0} | ${reasons} | ${l.message || '—'}`;
+    }).join('\n');
+
+    const content = header + body + (body ? '\n' : '');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `moderation-logs-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   // Stats
   const stats = useMemo(() => {
@@ -268,6 +308,18 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
             color: 'rgba(255,255,255,0.55)',
             animation: refreshing ? 'spin 1s linear infinite' : 'none',
           }} />
+        </button>
+
+        <button onClick={exportTxt} style={{
+          padding: '7px 11px', borderRadius: '10px', cursor: 'pointer',
+          background: 'rgba(0,200,120,0.08)', border: 'none', outline: 'none',
+          display: 'flex', alignItems: 'center', gap: '6px',
+          fontSize: '11px', fontWeight: 600, color: '#00c878',
+        }} title={lang === 'ru' ? 'Экспорт в .txt' : 'Export to .txt'}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,200,120,0.18)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'rgba(0,200,120,0.08)')}>
+          <Download size={12} style={{ color: '#00c878' }} />
+          {lang === 'ru' ? 'Экспорт .txt' : 'Export .txt'}
         </button>
 
         <button onClick={() => setConfirmDelete({ all: true })} disabled={logs.length === 0} style={{

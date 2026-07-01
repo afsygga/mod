@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
+import { recordAudit } from '../utils/audit';
 
 export const channelRouter = Router();
 
@@ -53,6 +54,7 @@ channelRouter.post('/', async (req: Request, res: Response) => {
     const tm = (global as any).twitchManager;
     if (tm) await tm.joinChannel(cleanName, email);
     const { rows } = await db.query('SELECT * FROM channels WHERE name=$1', [cleanName]);
+    recordAudit(email, 'channel_add', cleanName);
     res.json(rows[0]);
   } catch (err) {
     logger.error('POST /channels error', err);
@@ -72,6 +74,7 @@ channelRouter.delete('/:name', async (req: Request, res: Response) => {
       if (tm) await tm.leaveChannel(name);
       await db.query('DELETE FROM channel_subscribers WHERE channel_name=$1', [name]);
       await db.query('DELETE FROM channels WHERE name=$1', [name]);
+      recordAudit(email, 'channel_remove', name);
       return res.json({ success: true, deleted: true });
     }
     // User: just unsubscribe themselves
