@@ -232,13 +232,19 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
 
     if (!broadcasterId) return res.status(404).json({ error: 'broadcaster not found' });
 
-    // 2. Fetch moderator list from Helix using stored OAuth token
-    const { rows: userRows } = await db.query(
-      'SELECT twitch_oauth FROM users WHERE email=$1', [ownerEmail]
-    );
-    const rawOauth: string = userRows[0]?.twitch_oauth || '';
-    const accessToken = rawOauth.startsWith('oauth:') ? rawOauth.slice(6) : rawOauth;
+    // 2. Fetch moderator list from Helix. "Get Moderators" requires the
+    // BROADCASTER's token, so prefer the broadcaster token captured via
+    // /broadcaster; fall back to the owner's OAuth token.
     const clientId = process.env.TWITCH_CLIENT_ID || '';
+    const { rows: btRows } = await db.query(
+      'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channel]
+    );
+    let accessToken: string = btRows[0]?.access_token || '';
+    if (!accessToken) {
+      const { rows: userRows } = await db.query('SELECT twitch_oauth FROM users WHERE email=$1', [ownerEmail]);
+      const rawOauth: string = userRows[0]?.twitch_oauth || '';
+      accessToken = rawOauth.startsWith('oauth:') ? rawOauth.slice(6) : rawOauth;
+    }
     const oauthHeaders: Record<string, string> = accessToken
       ? { 'Client-Id': clientId, 'Authorization': `Bearer ${accessToken}` }
       : await tm.getHelixHeadersPublic(ownerEmail);
@@ -609,14 +615,20 @@ adminRouter.get('/moderators/:username/profile', async (req: Request, res: Respo
     // whose twitch_username is that login.
     const actorClause = `(ml.performed_by=$1 OR ml.performed_by IN (SELECT email FROM users WHERE LOWER(twitch_username)=LOWER($1)))`;
 
-    const [actionBreakdown, dailyActivity, recentActions, avgRespRow, metaRow] = await Promise.all([
+    const [actionBreakdown, dailyActivity, recentActions, avgRespRow, metaRow, dailyMsgRow] = await Promise.all([
       db.query(`
         SELECT action, COUNT(*)::int AS c FROM moderation_logs ml
         WHERE ${actorClause} AND ($2::text IS NULL OR channel_name=$2)
         GROUP BY action ORDER BY c DESC
       `, [username, channel]),
       db.query(`
-        SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS c
+        SELECT date_trunc('day', created_at)::date AS day,
+          COUNT(*)::int AS c,
+          COUNT(*) FILTER (WHERE action='MUTED')::int AS mutes,
+          COUNT(*) FILTER (WHERE action='AUTO_MUTED')::int AS auto_mutes,
+          COUNT(*) FILTER (WHERE action='BANNED')::int AS bans,
+          COUNT(*) FILTER (WHERE action='UNBANNED')::int AS unbans,
+          COUNT(*) FILTER (WHERE action='FLAGGED')::int AS deletes
         FROM moderation_logs ml
         WHERE ${actorClause} AND ($2::text IS NULL OR channel_name=$2)
           AND created_at > NOW() - INTERVAL '30 days'
@@ -648,6 +660,13 @@ adminRouter.get('/moderators/:username/profile', async (req: Request, res: Respo
         WHERE u.email=$1 OR LOWER(u.twitch_username)=$1
         LIMIT 1
       `, [username]),
+      // Channel chat volume per day (context line) — needs a channel
+      channel ? db.query(`
+        SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS c
+        FROM messages
+        WHERE channel_name=$1 AND created_at > NOW() - INTERVAL '30 days'
+        GROUP BY day ORDER BY day
+      `, [channel]) : Promise.resolve({ rows: [] as any[] }),
     ]);
 
     res.json({
@@ -657,6 +676,7 @@ adminRouter.get('/moderators/:username/profile', async (req: Request, res: Respo
       avg_response_sec: avgRespRow.rows[0]?.avg_response_sec || null,
       profile_image_url: metaRow.rows[0]?.profile_image_url || null,
       display_name: metaRow.rows[0]?.display_name || null,
+      daily_messages: dailyMsgRow.rows,
     });
   } catch (err) {
     res.status(500).json({ error: 'moderator profile failed' });

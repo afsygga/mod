@@ -44,7 +44,8 @@ interface MinuteData {
 
 interface ModProfile {
   action_breakdown: { action: string; c: number }[];
-  daily_activity: { day: string; c: number }[];
+  daily_activity: { day: string; c: number; mutes: number; auto_mutes: number; bans: number; unbans: number; deletes: number }[];
+  daily_messages?: { day: string; c: number }[];
   recent_actions: { action: string; target_username: string; channel_name: string; created_at: string }[];
   avg_response_sec: number | null;
   profile_image_url: string | null;
@@ -116,6 +117,7 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
 }) {
   const [profile, setProfile] = useState<ModProfile | null>(null);
   const [profileChannel, setProfileChannel] = useState(channel);
+  const [hoverDay, setHoverDay] = useState<number | null>(null);
 
   useEffect(() => {
     const username = mod.twitch_login;
@@ -167,19 +169,39 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   const polygon = innerPts.map(p => `${p.x},${p.y}`).join(' ');
   const outerPolygon = outerPts.map(p => `${p.x},${p.y}`).join(' ');
 
-  // Daily activity 30-day bar chart
-  const last30: { day: string; c: number }[] = [];
+  // Daily activity 30-day detailed chart
+  type Day30 = { day: string; total: number; mutes: number; bans: number; unbans: number; deletes: number; msgs: number };
+  const last30: Day30[] = [];
   if (profile) {
-    const dayMap: Record<string, number> = {};
-    profile.daily_activity.forEach(d => { dayMap[d.day.slice(0, 10)] = d.c; });
+    const actMap: Record<string, ModProfile['daily_activity'][number]> = {};
+    profile.daily_activity.forEach(d => { actMap[d.day.slice(0, 10)] = d; });
+    const msgMap: Record<string, number> = {};
+    (profile.daily_messages || []).forEach(d => { msgMap[d.day.slice(0, 10)] = d.c; });
+    // MSK calendar days
+    const mskKey = (dt: Date) => {
+      const s = dt.toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' }); // YYYY-MM-DD
+      return s;
+    };
     for (let i = 29; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
-      last30.push({ day: key, c: dayMap[key] || 0 });
+      const key = mskKey(d);
+      const a = actMap[key];
+      const mutes = a ? (a.mutes || 0) + (a.auto_mutes || 0) : 0;
+      last30.push({
+        day: key,
+        total: mutes + (a?.bans || 0) + (a?.unbans || 0) + (a?.deletes || 0),
+        mutes,
+        bans: a?.bans || 0,
+        unbans: a?.unbans || 0,
+        deletes: a?.deletes || 0,
+        msgs: msgMap[key] || 0,
+      });
     }
   }
-  const maxDayC = Math.max(...last30.map(d => d.c), 1);
+  const maxDayTotal = Math.max(...last30.map(d => d.total), 1);
+  const maxDayMsgs = Math.max(...last30.map(d => d.msgs), 1);
+  const hasAny30 = last30.some(d => d.total > 0 || d.msgs > 0);
 
   // Action distribution
   const totalAct = profile?.action_breakdown.reduce((s, a) => s + a.c, 0) || 1;
@@ -358,21 +380,164 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
           </div>
 
           {/* 30-day activity chart */}
-          <div style={{ ...sectionCard, marginBottom: '10px' }}>
-            <div style={sectionTitle}>Активность за 30 дней</div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '40px' }}>
-              {last30.map((d, i) => {
-                const h = d.c === 0 ? 2 : Math.max(4, (d.c / maxDayC) * 40);
-                return (
-                  <div key={i} title={`${d.day}: ${d.c}`}
-                    style={{ flex: 1, height: `${h}px`, borderRadius: '2px 2px 0 0', background: d.c === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(160,112,255,0.6)', transition: 'background 0.15s' }}
-                    onMouseEnter={e => { if (d.c > 0) (e.currentTarget as HTMLElement).style.background = 'rgba(160,112,255,1)'; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = d.c === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(160,112,255,0.6)'; }}
-                  />
-                );
-              })}
-            </div>
-          </div>
+          {(() => {
+            const VB_W = 600, CHART_H = 130, PAD_T = 8, PAD_B = 18, PAD_L = 24, PAD_R = 6;
+            const plotW = VB_W - PAD_L - PAD_R;
+            const plotH = CHART_H - PAD_T - PAD_B;
+            const n = last30.length || 30;
+            const slot = plotW / n;
+            const barW = Math.max(3, slot * 0.62);
+            const barGap = (slot - barW) / 2;
+            const xOf = (i: number) => PAD_L + i * slot + barGap;
+            const cxOf = (i: number) => PAD_L + i * slot + slot / 2;
+            const yOf = (v: number) => PAD_T + plotH - (v / maxDayTotal) * plotH;
+            const yMsg = (v: number) => PAD_T + plotH - (v / maxDayMsgs) * plotH;
+            const rTop = Math.min(3, barW / 2);
+            const gridLevels = [0.5, 1];
+            const msgPts: [number, number][] = last30.map((d, i) => [i, d.msgs]);
+            // build smooth msg path scaled to msg max within plot
+            const toXm = (i: number) => cxOf(i);
+            const smoothMsg = (close: boolean) => {
+              if (last30.length < 2) return '';
+              let dd = `M ${toXm(0)} ${yMsg(msgPts[0][1])}`;
+              for (let i = 1; i < last30.length; i++) {
+                const cpx = (toXm(i - 1) + toXm(i)) / 2;
+                dd += ` C ${cpx} ${yMsg(msgPts[i - 1][1])}, ${cpx} ${yMsg(msgPts[i][1])}, ${toXm(i)} ${yMsg(msgPts[i][1])}`;
+              }
+              if (close) dd += ` L ${toXm(last30.length - 1)} ${PAD_T + plotH} L ${toXm(0)} ${PAD_T + plotH} Z`;
+              return dd;
+            };
+            const hd = hoverDay !== null ? last30[hoverDay] : null;
+            const legendItems = [
+              { c: '#ffc800', l: 'Муты' }, { c: '#ff5959', l: 'Баны' },
+              { c: '#00c878', l: 'Разбаны' }, { c: '#a070ff', l: 'Удаления' },
+              { c: '#00e5cc', l: 'Чат' },
+            ];
+            return (
+              <div style={{ ...sectionCard, marginBottom: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div style={{ ...sectionTitle, marginBottom: 0 }}>Активность за 30 дней</div>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    {legendItems.map(it => (
+                      <span key={it.l} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '9px', color: 'rgba(255,255,255,0.45)' }}>
+                        <span style={{ width: it.l === 'Чат' ? '10px' : '7px', height: it.l === 'Чат' ? '2px' : '7px', borderRadius: it.l === 'Чат' ? '1px' : '2px', background: it.c, display: 'inline-block' }} />
+                        {it.l}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                {!hasAny30 ? (
+                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)', padding: '6px 0' }}>Нет активности</div>
+                ) : (
+                  <div style={{ position: 'relative', width: '100%' }}>
+                    <svg viewBox={`0 0 ${VB_W} ${CHART_H}`} width="100%" style={{ display: 'block', overflow: 'visible' }}
+                      onMouseLeave={() => setHoverDay(null)}
+                      onMouseMove={e => {
+                        const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+                        const x = ((e.clientX - rect.left) / rect.width) * VB_W;
+                        const idx = Math.floor((x - PAD_L) / slot);
+                        setHoverDay(idx >= 0 && idx < n ? idx : null);
+                      }}>
+                      {/* gridlines */}
+                      {gridLevels.map(f => (
+                        <g key={f}>
+                          <line x1={PAD_L} y1={yOf(maxDayTotal * f)} x2={VB_W - PAD_R} y2={yOf(maxDayTotal * f)}
+                            stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="3 4" />
+                          <text x={PAD_L - 4} y={yOf(maxDayTotal * f) + 3} textAnchor="end"
+                            style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.3)', fontFamily: 'Inter,sans-serif' }}>
+                            {Math.round(maxDayTotal * f)}
+                          </text>
+                        </g>
+                      ))}
+                      {/* max label top */}
+                      <text x={PAD_L - 4} y={PAD_T + 3} textAnchor="end"
+                        style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.35)', fontFamily: 'Inter,sans-serif' }}>{maxDayTotal}</text>
+
+                      {/* chat area + line */}
+                      <path d={smoothMsg(true)} fill="rgba(0,229,204,0.06)" stroke="none" />
+                      <path d={smoothMsg(false)} fill="none" stroke="rgba(0,229,204,0.55)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+
+                      {/* hover crosshair */}
+                      {hoverDay !== null && (
+                        <line x1={cxOf(hoverDay)} y1={PAD_T} x2={cxOf(hoverDay)} y2={PAD_T + plotH}
+                          stroke="rgba(255,255,255,0.18)" strokeWidth="1" />
+                      )}
+
+                      {/* stacked bars */}
+                      {last30.map((d, i) => {
+                        if (d.total === 0) return null;
+                        const segs = [
+                          { v: d.mutes, c: '#ffc800' },
+                          { v: d.bans, c: '#ff5959' },
+                          { v: d.unbans, c: '#00c878' },
+                          { v: d.deletes, c: '#a070ff' },
+                        ];
+                        let acc = 0;
+                        const x = xOf(i);
+                        return (
+                          <g key={i} opacity={hoverDay === null || hoverDay === i ? 1 : 0.45}>
+                            {segs.map((s, si) => {
+                              if (s.v <= 0) return null;
+                              const segH = (s.v / maxDayTotal) * plotH;
+                              const yTop = PAD_T + plotH - acc - segH;
+                              acc += segH;
+                              const isTop = acc >= (d.total / maxDayTotal) * plotH - 0.01;
+                              return (
+                                <rect key={si} x={x} y={yTop} width={barW} height={segH}
+                                  rx={isTop ? rTop : 0} ry={isTop ? rTop : 0} fill={s.c} />
+                              );
+                            })}
+                          </g>
+                        );
+                      })}
+
+                      {/* x-axis date labels every 6th */}
+                      {last30.map((d, i) => {
+                        if (i % 6 !== 0 && i !== last30.length - 1) return null;
+                        const [, mm, dd] = d.day.split('-');
+                        return (
+                          <text key={i} x={cxOf(i)} y={CHART_H - 5} textAnchor="middle"
+                            style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.35)', fontFamily: 'Inter,sans-serif' }}>
+                            {dd}.{mm}
+                          </text>
+                        );
+                      })}
+                    </svg>
+
+                    {/* tooltip */}
+                    {hd && (
+                      <div style={{
+                        position: 'absolute', top: 0,
+                        left: `${(cxOf(hoverDay!) / VB_W) * 100}%`,
+                        transform: `translateX(${hoverDay! > n / 2 ? '-105%' : '5%'})`,
+                        pointerEvents: 'none', zIndex: 5,
+                        background: 'rgba(18,18,26,0.97)', border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '8px', padding: '8px 10px', minWidth: '120px',
+                        boxShadow: '0 6px 20px rgba(0,0,0,0.5)',
+                      }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.9)', marginBottom: '5px' }}>
+                          {(() => { const [, mm, dd] = hd.day.split('-'); return `${dd}.${mm}`; })()}
+                        </div>
+                        {[
+                          { l: 'Муты', v: hd.mutes, c: '#ffc800' },
+                          { l: 'Баны', v: hd.bans, c: '#ff5959' },
+                          { l: 'Разбаны', v: hd.unbans, c: '#00c878' },
+                          { l: 'Удаления', v: hd.deletes, c: '#a070ff' },
+                          { l: 'Сообщений', v: hd.msgs, c: '#00e5cc' },
+                        ].map(r => (
+                          <div key={r.l} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', padding: '1px 0' }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '2px', background: r.c }} />
+                            <span style={{ flex: 1, color: 'rgba(255,255,255,0.55)' }}>{r.l}</span>
+                            <span style={{ fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>{r.v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Recent actions */}
           {hasRecentData ? (
