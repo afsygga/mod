@@ -5,6 +5,7 @@ import { db } from '../database/db';
 import { broadcast } from '../websocket/wsHandler';
 import { logger } from '../utils/logger';
 import { TelegramBot } from '../telegram/TelegramBot';
+import { refreshUserToken } from './twitchToken';
 
 interface UserConnection {
   email: string;
@@ -591,24 +592,29 @@ export class TwitchManager {
     );
     const openBeforeSet = new Set<string>(openBefore.map((r: any) => r.channel_name));
 
-    // Try each candidate token until Helix responds OK
-    const candidates = await this.getHelixCandidates();
-    if (candidates.length === 0) { logger.warn('[streams] no Helix token available'); return { started: [], ended: [], live: 0 }; }
     const q = channelNames.map((c: string) => `user_login=${encodeURIComponent(c)}`).join('&');
-    let liveStreams: any[] | null = null;
-    let lastErr = '';
-    for (const headers of candidates) {
-      const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), 10_000);
-      try {
-        const helixRes = await fetch(`https://api.twitch.tv/helix/streams?${q}&first=100`, { headers, signal: ctrl.signal });
-        if (helixRes.ok) { const data: any = await helixRes.json(); liveStreams = data.data || []; break; }
-        lastErr = `Helix ${helixRes.status}`;
-      } catch (e: any) {
-        lastErr = e?.message || 'fetch failed';
-      } finally {
-        clearTimeout(to);
+    const tryFetch = async (): Promise<{ live: any[] | null; err: string }> => {
+      const candidates = await this.getHelixCandidates();
+      let err = 'no token';
+      for (const headers of candidates) {
+        const ctrl = new AbortController();
+        const to = setTimeout(() => ctrl.abort(), 10_000);
+        try {
+          const r = await fetch(`https://api.twitch.tv/helix/streams?${q}&first=100`, { headers, signal: ctrl.signal });
+          if (r.ok) { const data: any = await r.json(); return { live: data.data || [], err: '' }; }
+          err = `Helix ${r.status}`;
+        } catch (e: any) { err = e?.message || 'fetch failed'; }
+        finally { clearTimeout(to); }
       }
+      return { live: null, err };
+    };
+
+    let { live: liveStreams, err: lastErr } = await tryFetch();
+    // All tokens rejected → refresh every user token once and retry
+    if (liveStreams === null) {
+      const { rows: emails } = await db.query("SELECT email FROM users WHERE twitch_refresh IS NOT NULL");
+      for (const r of emails) await refreshUserToken(r.email);
+      ({ live: liveStreams, err: lastErr } = await tryFetch());
     }
     if (liveStreams === null) { logger.warn(`[streams] all Helix tokens failed: ${lastErr}`); return { started: [], ended: [], live: 0 }; }
 
@@ -680,8 +686,16 @@ export class TwitchManager {
   private async getUserIds(logins: string[], ownerEmail: string | null): Promise<Record<string, string>> {
     const lowered = logins.map(l => l.toLowerCase());
     const query = lowered.map(l => `login=${l}`).join('&');
-    const headers = await this.getHelixHeaders(ownerEmail);
-    const res = await fetch(`https://api.twitch.tv/helix/users?${query}`, { headers });
+    let headers = await this.getHelixHeaders(ownerEmail);
+    let res = await fetch(`https://api.twitch.tv/helix/users?${query}`, { headers });
+    // Token expired → refresh and retry once
+    if (res.status === 401 && ownerEmail) {
+      const fresh = await refreshUserToken(ownerEmail);
+      if (fresh) {
+        headers = { 'Client-Id': process.env.TWITCH_CLIENT_ID || '', 'Authorization': `Bearer ${fresh}`, 'Content-Type': 'application/json' };
+        res = await fetch(`https://api.twitch.tv/helix/users?${query}`, { headers });
+      }
+    }
     const data = await res.json() as any;
     if (!res.ok) {
       logger.error(`getUserIds failed ${res.status} for ${lowered.join(',')} owner=${ownerEmail}: ${JSON.stringify(data)}`);
@@ -752,8 +766,15 @@ export class TwitchManager {
     const cached = this.moderatorIdCache.get(cacheKey);
     if (cached) return cached;
     try {
-      const headers = await this.getHelixHeaders(ownerEmail);
-      const res = await fetch('https://api.twitch.tv/helix/users', { headers });
+      let headers = await this.getHelixHeaders(ownerEmail);
+      let res = await fetch('https://api.twitch.tv/helix/users', { headers });
+      if (res.status === 401 && ownerEmail) {
+        const fresh = await refreshUserToken(ownerEmail);
+        if (fresh) {
+          headers = { 'Client-Id': process.env.TWITCH_CLIENT_ID || '', 'Authorization': `Bearer ${fresh}`, 'Content-Type': 'application/json' };
+          res = await fetch('https://api.twitch.tv/helix/users', { headers });
+        }
+      }
       const data = await res.json() as any;
       const id = data.data?.[0]?.id;
       if (id) {

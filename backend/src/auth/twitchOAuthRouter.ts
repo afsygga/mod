@@ -112,8 +112,8 @@ twitchOAuthRouter.get('/callback', async (req: Request, res: Response) => {
     if (!twitchUser) return res.redirect(`${frontendUrl}?twitch_error=no_user_data`);
 
     const oauthToken = `oauth:${accessToken}`;
-    await db.query('UPDATE users SET twitch_username=$1, twitch_oauth=$2 WHERE email=$3',
-      [twitchUser.login, oauthToken, email]);
+    await db.query('UPDATE users SET twitch_username=$1, twitch_oauth=$2, twitch_refresh=$3 WHERE email=$4',
+      [twitchUser.login, oauthToken, tokenData.refresh_token || null, email]);
 
     logger.info(`Twitch OAuth connected: ${twitchUser.login} for ${email}`);
 
@@ -193,10 +193,10 @@ twitchOAuthRouter.get('/broadcaster-callback', async (req: Request, res: Respons
     if (!twitchUser) return res.redirect(`${frontendUrl}/broadcaster?error=no_user_data`);
 
     await db.query(`
-      INSERT INTO broadcaster_tokens (twitch_login, twitch_id, access_token, updated_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (twitch_login) DO UPDATE SET access_token=$3, twitch_id=$2, updated_at=NOW()
-    `, [twitchUser.login, twitchUser.id, accessToken]);
+      INSERT INTO broadcaster_tokens (twitch_login, twitch_id, access_token, refresh_token, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (twitch_login) DO UPDATE SET access_token=$3, refresh_token=$4, twitch_id=$2, updated_at=NOW()
+    `, [twitchUser.login, twitchUser.id, accessToken, tokenData.refresh_token || null]);
 
     logger.info(`Broadcaster OAuth connected: ${twitchUser.login}`);
     res.redirect(`${frontendUrl}/broadcaster?success=1&login=${encodeURIComponent(twitchUser.login)}`);

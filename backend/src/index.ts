@@ -104,6 +104,7 @@ async function runMigrations() {
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(32)`);
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_enabled BOOLEAN DEFAULT true`);
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mute_reason TEXT`);
+    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS twitch_refresh TEXT`);
     await db.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS trigger_after_n INTEGER DEFAULT 1`);
     // Channel subscribers (M:N) — many users can be moderators of the same channel
     await db.query(`
@@ -184,6 +185,7 @@ async function runMigrations() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    await db.query(`ALTER TABLE broadcaster_tokens ADD COLUMN IF NOT EXISTS refresh_token TEXT`);
     // One-time clean slate: wipe old stream history + chat messages so backend
     // tracking starts fresh from 2026-07-01. Guarded by a flag so it runs once.
     const { rows: resetFlag } = await db.query("SELECT 1 FROM settings WHERE key='reset_streams_2026_07_01'");
