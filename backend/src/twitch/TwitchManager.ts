@@ -540,7 +540,7 @@ export class TwitchManager {
         'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channelName]
       );
       if (!btRows[0]?.access_token) {
-        return `Нужна авторизация стримера: пусть ${channelName} войдёт на afsyg.gay/broadcaster`;
+        return `Категория не изменена: требуется авторизация стримера на сайте`;
       }
       let patchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${btRows[0].access_token}`, 'Content-Type': 'application/json' };
       let patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
