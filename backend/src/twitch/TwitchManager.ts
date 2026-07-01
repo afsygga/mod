@@ -556,17 +556,33 @@ export class TwitchManager {
    * sessions and close ended ones. Returns which channels just started/ended
    * so callers can broadcast live events.
    */
-  async syncStreams(): Promise<{ started: string[]; ended: string[]; live: number }> {
-    const channelNames: string[] = this.getChannelNames();
-    if (channelNames.length === 0) return { started: [], ended: [], live: 0 };
+  /** Collect candidate Helix header sets (client-id + bearer) to try, in order. */
+  private async getHelixCandidates(): Promise<Array<Record<string, string>>> {
+    const clientId = process.env.TWITCH_CLIENT_ID || '';
+    const out: Array<Record<string, string>> = [];
+    const seen = new Set<string>();
+    const add = (tok: string) => {
+      const t = (tok || '').replace(/^oauth:/, '');
+      if (t && !seen.has(t)) { seen.add(t); out.push({ 'Client-Id': clientId, 'Authorization': `Bearer ${t}` }); }
+    };
+    // 1. Any site user with a Twitch OAuth token
+    const { rows: users } = await db.query("SELECT twitch_oauth FROM users WHERE twitch_oauth IS NOT NULL");
+    for (const r of users) add(r.twitch_oauth);
+    // 2. Broadcaster tokens
+    const { rows: bt } = await db.query('SELECT access_token FROM broadcaster_tokens');
+    for (const r of bt) add(r.access_token);
+    // 3. Env bot token
+    add(process.env.TWITCH_BOT_OAUTH || '');
+    return out;
+  }
 
-    // Get any connected owner email for Helix creds
-    const { rows: ownerRows } = await db.query(
-      'SELECT owner_email FROM channels WHERE name = ANY($1) AND owner_email IS NOT NULL LIMIT 1',
-      [channelNames]
-    );
-    const ownerEmail = ownerRows[0]?.owner_email || null;
-    const headers = await this.getHelixHeaders(ownerEmail);
+  async syncStreams(): Promise<{ started: string[]; ended: string[]; live: number }> {
+    // Poll every channel in the DB (not just IRC-joined ones) so tracking works
+    // even if the bot's IRC connection is down.
+    const { rows: chRows } = await db.query('SELECT name FROM channels');
+    const dbChannels = chRows.map((r: any) => r.name.toLowerCase());
+    const channelNames = [...new Set([...dbChannels, ...this.getChannelNames().map(c => c.toLowerCase())])];
+    if (channelNames.length === 0) return { started: [], ended: [], live: 0 };
 
     // Channels that currently have an open session (before this sync)
     const { rows: openBefore } = await db.query(
@@ -575,18 +591,26 @@ export class TwitchManager {
     );
     const openBeforeSet = new Set<string>(openBefore.map((r: any) => r.channel_name));
 
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 10_000);
-    let liveStreams: any[] = [];
-    try {
-      const q = channelNames.map((c: string) => `user_login=${encodeURIComponent(c)}`).join('&');
-      const helixRes = await fetch(`https://api.twitch.tv/helix/streams?${q}&first=100`, { headers, signal: ctrl.signal });
-      if (!helixRes.ok) throw new Error(`Helix ${helixRes.status}`);
-      const data: any = await helixRes.json();
-      liveStreams = data.data || [];
-    } finally {
-      clearTimeout(to);
+    // Try each candidate token until Helix responds OK
+    const candidates = await this.getHelixCandidates();
+    if (candidates.length === 0) { logger.warn('[streams] no Helix token available'); return { started: [], ended: [], live: 0 }; }
+    const q = channelNames.map((c: string) => `user_login=${encodeURIComponent(c)}`).join('&');
+    let liveStreams: any[] | null = null;
+    let lastErr = '';
+    for (const headers of candidates) {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 10_000);
+      try {
+        const helixRes = await fetch(`https://api.twitch.tv/helix/streams?${q}&first=100`, { headers, signal: ctrl.signal });
+        if (helixRes.ok) { const data: any = await helixRes.json(); liveStreams = data.data || []; break; }
+        lastErr = `Helix ${helixRes.status}`;
+      } catch (e: any) {
+        lastErr = e?.message || 'fetch failed';
+      } finally {
+        clearTimeout(to);
+      }
     }
+    if (liveStreams === null) { logger.warn(`[streams] all Helix tokens failed: ${lastErr}`); return { started: [], ended: [], live: 0 }; }
 
     const liveChannels = new Set<string>(liveStreams.map((s: any) => s.user_login.toLowerCase()));
 
