@@ -604,27 +604,42 @@ adminRouter.get('/moderators/:username/profile', async (req: Request, res: Respo
     const username = req.params.username;
     const channel = (req.query.channel as string) || null;
 
+    // performed_by may be a Twitch login (EventSub / external) or a site email.
+    // Match logs where performed_by is the given login OR the email of the user
+    // whose twitch_username is that login.
+    const actorClause = `(ml.performed_by=$1 OR ml.performed_by IN (SELECT email FROM users WHERE LOWER(twitch_username)=LOWER($1)))`;
+
     const [actionBreakdown, dailyActivity, recentActions, avgRespRow, metaRow] = await Promise.all([
       db.query(`
-        SELECT action, COUNT(*)::int AS c FROM moderation_logs
-        WHERE performed_by=$1 AND ($2::text IS NULL OR channel_name=$2)
+        SELECT action, COUNT(*)::int AS c FROM moderation_logs ml
+        WHERE ${actorClause} AND ($2::text IS NULL OR channel_name=$2)
         GROUP BY action ORDER BY c DESC
       `, [username, channel]),
       db.query(`
         SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS c
-        FROM moderation_logs
-        WHERE performed_by=$1 AND ($2::text IS NULL OR channel_name=$2)
+        FROM moderation_logs ml
+        WHERE ${actorClause} AND ($2::text IS NULL OR channel_name=$2)
           AND created_at > NOW() - INTERVAL '30 days'
         GROUP BY day ORDER BY day
       `, [username, channel]),
       db.query(`
-        SELECT action, target_username, channel_name, created_at FROM moderation_logs
-        WHERE performed_by=$1 AND ($2::text IS NULL OR channel_name=$2)
+        SELECT action, username AS target_username, channel_name, created_at FROM moderation_logs ml
+        WHERE ${actorClause} AND ($2::text IS NULL OR channel_name=$2)
         ORDER BY created_at DESC LIMIT 20
       `, [username, channel]),
+      // Real mute reaction time: seconds from the muted user's last message to the mute
       db.query(`
-        SELECT ROUND(AVG(EXTRACT(EPOCH FROM (created_at - LAG(created_at) OVER (ORDER BY created_at))))::numeric, 1) AS avg_response_sec
-        FROM moderation_logs WHERE performed_by=$1 AND action='MUTED' AND ($2::text IS NULL OR channel_name=$2)
+        SELECT ROUND(AVG(EXTRACT(EPOCH FROM (ml.created_at - m.msg_time)))::numeric, 1) AS avg_response_sec
+        FROM moderation_logs ml
+        JOIN LATERAL (
+          SELECT created_at AS msg_time FROM messages
+          WHERE channel_name = ml.channel_name AND LOWER(username) = LOWER(ml.username)
+            AND created_at <= ml.created_at
+          ORDER BY created_at DESC LIMIT 1
+        ) m ON true
+        WHERE ${actorClause} AND ml.action IN ('MUTED','AUTO_MUTED')
+          AND ($2::text IS NULL OR ml.channel_name=$2)
+          AND ml.created_at - m.msg_time < INTERVAL '10 minutes'
       `, [username, channel]),
       db.query(`
         SELECT tm.profile_image_url, tm.display_name

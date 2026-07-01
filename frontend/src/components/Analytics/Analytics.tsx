@@ -127,12 +127,17 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   const rankColors = ['#ffc800', '#9e9e9e', '#cd7f32'];
   const rankColor = rankColors[rank - 1] || 'rgba(255,255,255,0.3)';
 
-  // Compute KPD
   const bans = mod.bans || 0;
   const mutes = mod.mutes || 0;
   const autoMutes = mod.auto_mutes || 0;
   const total = mod.total || 1;
-  const kpd = Math.min(100, Math.round((bans * 3 + mutes * 1 + autoMutes * 0.5) / Math.max(1, total) * 100));
+
+  // Format average reaction time
+  const fmtReaction = (sec: number | null): string => {
+    if (sec === null || sec === undefined) return '—';
+    if (sec < 60) return `${Math.round(sec)}с`;
+    return `${Math.floor(sec / 60)}м ${Math.round(sec % 60)}с`;
+  };
 
   // Radar scores (0-100 each)
   const avgRespSec = profile?.avg_response_sec || null;
@@ -162,11 +167,6 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   const polygon = innerPts.map(p => `${p.x},${p.y}`).join(' ');
   const outerPolygon = outerPts.map(p => `${p.x},${p.y}`).join(' ');
 
-  // KPD SVG circle
-  const KPD_R = 36;
-  const KPD_CIRC = 2 * Math.PI * KPD_R;
-  const kpdDash = (kpd / 100) * KPD_CIRC;
-
   // Daily activity 30-day bar chart
   const last30: { day: string; c: number }[] = [];
   if (profile) {
@@ -184,6 +184,24 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   // Action distribution
   const totalAct = profile?.action_breakdown.reduce((s, a) => s + a.c, 0) || 1;
 
+  const hasActionData = !!(profile && profile.action_breakdown.length > 0);
+  const hasRecentData = !!(profile && profile.recent_actions.length > 0);
+
+  const sectionCard: React.CSSProperties = {
+    padding: '14px', borderRadius: '14px',
+    background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+  };
+  const sectionTitle: React.CSSProperties = {
+    fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.4)',
+    textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '10px',
+  };
+  const emptyLine = (label: string) => (
+    <div style={{ ...sectionCard, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <span style={{ ...sectionTitle, marginBottom: 0 }}>{label}</span>
+      <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>Нет данных</span>
+    </div>
+  );
+
   return (
     <div
       onClick={onClose}
@@ -199,47 +217,47 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         onClick={e => e.stopPropagation()}
         style={{
-          width: '100%', maxWidth: '820px',
+          width: '100%', maxWidth: '720px', maxHeight: '88vh', overflowY: 'auto',
           background: 'rgba(12,12,18,1)',
           border: '1px solid rgba(255,255,255,0.08)',
-          borderRadius: '20px', overflow: 'hidden',
+          borderRadius: '18px',
         }}>
 
         {/* Header */}
-        <div style={{ padding: '24px 28px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'flex-start', gap: '18px' }}>
+        <div style={{ padding: '18px 20px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
           {/* Avatar */}
           <div style={{ position: 'relative', flexShrink: 0 }}>
             {mod.twitch_avatar ? (
-              <img src={mod.twitch_avatar} alt="" style={{ width: '64px', height: '64px', borderRadius: '50%', border: `2px solid ${rankColor}66` }} />
+              <img src={mod.twitch_avatar} alt="" style={{ width: '52px', height: '52px', borderRadius: '50%', border: `2px solid ${rankColor}66` }} />
             ) : (
-              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(160,112,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', fontWeight: 800, color: '#a070ff', border: `2px solid ${rankColor}66` }}>
+              <div style={{ width: '52px', height: '52px', borderRadius: '50%', background: 'rgba(160,112,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', fontWeight: 800, color: '#a070ff', border: `2px solid ${rankColor}66` }}>
                 {mod.twitch_display_name[0]?.toUpperCase()}
               </div>
             )}
-            <div style={{ position: 'absolute', bottom: '-2px', right: '-2px', background: '#9147ff', borderRadius: '50%', width: '18px', height: '18px', border: '2px solid rgba(12,12,18,1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <svg width="8" height="8" viewBox="0 0 24 24" fill="white"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/></svg>
+            <div style={{ position: 'absolute', bottom: '-2px', right: '-2px', background: '#9147ff', borderRadius: '50%', width: '16px', height: '16px', border: '2px solid rgba(12,12,18,1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="7" height="7" viewBox="0 0 24 24" fill="white"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/></svg>
             </div>
           </div>
 
           {/* Name + rank */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-              <span style={{ fontSize: '20px', fontWeight: 800, color: '#fff' }}>{mod.twitch_display_name}</span>
-              <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 10px', borderRadius: '20px', background: `${rankColor}18`, color: rankColor, border: `1px solid ${rankColor}44` }}>#{rank}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
+              <span style={{ fontSize: '17px', fontWeight: 800, color: '#fff' }}>{mod.twitch_display_name}</span>
+              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', background: `${rankColor}18`, color: rankColor, border: `1px solid ${rankColor}44` }}>#{rank}</span>
             </div>
-            <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>@{mod.twitch_login}</div>
-            {mod.last_action && <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.2)' }}>Последнее действие: {msk(mod.last_action)}</div>}
+            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: mod.last_action ? '5px' : 0 }}>@{mod.twitch_login}</div>
+            {mod.last_action && <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.2)' }}>Последнее действие: {msk(mod.last_action)}</div>}
           </div>
 
           {/* Channel selector */}
           {channels.length > 1 && (
             <div style={{ position: 'relative', flexShrink: 0 }}>
               <select value={profileChannel} onChange={e => setProfileChannel(e.target.value)}
-                style={{ appearance: 'none', padding: '7px 28px 7px 12px', borderRadius: '9px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', fontSize: '12px', cursor: 'pointer', outline: 'none' }}>
+                style={{ appearance: 'none', padding: '6px 26px 6px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', fontSize: '11px', cursor: 'pointer', outline: 'none' }}>
                 <option value="">Все каналы</option>
                 {channels.map(ch => <option key={ch} value={ch}>{ch}</option>)}
               </select>
-              <ChevronDown size={11} style={{ position: 'absolute', right: '9px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.4)', pointerEvents: 'none' }} />
+              <ChevronDown size={11} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.4)', pointerEvents: 'none' }} />
             </div>
           )}
 
@@ -247,53 +265,37 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', padding: '4px', borderRadius: '6px', display: 'flex', flexShrink: 0 }}
             onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.7)')}
             onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.3)')}>
-            <X size={18} />
+            <X size={17} />
           </button>
         </div>
 
-        <div style={{ padding: '24px 28px' }}>
-          {/* KPD + Stats row */}
-          <div style={{ display: 'flex', gap: '16px', marginBottom: '20px', flexWrap: 'wrap' }}>
-            {/* KPD Circle */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 20px', borderRadius: '16px', background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)', minWidth: '110px' }}>
-              <svg width="90" height="90" viewBox="0 0 90 90">
-                <defs>
-                  <linearGradient id="kpdGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="#a070ff" />
-                    <stop offset="100%" stopColor="#00e5cc" />
-                  </linearGradient>
-                </defs>
-                <circle cx="45" cy="45" r={KPD_R} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="6" />
-                <circle cx="45" cy="45" r={KPD_R} fill="none" stroke="url(#kpdGrad)" strokeWidth="6"
-                  strokeDasharray={`${kpdDash} ${KPD_CIRC}`}
-                  strokeLinecap="round" strokeDashoffset={KPD_CIRC / 4}
-                  style={{ transform: 'rotate(-90deg)', transformOrigin: '45px 45px' }} />
-                <text x="45" y="42" textAnchor="middle" style={{ fontSize: '18px', fontWeight: 800, fill: '#fff', fontFamily: 'Inter,sans-serif' }}>{kpd}</text>
-                <text x="45" y="55" textAnchor="middle" style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.35)', fontFamily: 'Inter,sans-serif' }}>КПД</text>
-              </svg>
-            </div>
-
-            {/* Stats */}
+        <div style={{ padding: '16px 20px' }}>
+          {/* Stats row */}
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
             {[
+              { label: 'Ср. реакция', value: fmtReaction(avgRespSec), color: '#00e5cc', icon: true },
               { label: 'Всего', value: total, color: '#fff' },
               { label: 'Мутов', value: mutes, color: '#ffc800' },
-              { label: 'Банов', value: bans, color: '#ff4444' },
+              { label: 'Банов', value: bans, color: '#ff5959' },
               { label: 'Разбанов', value: mod.unbans || 0, color: '#00c878' },
               { label: 'Авто-мут', value: autoMutes, color: '#ff9800' },
-            ].map(({ label, value, color }) => (
-              <div key={label} style={{ flex: '1', minWidth: '80px', padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                <div style={{ fontSize: '26px', fontWeight: 800, color, lineHeight: 1 }}>{value}</div>
-                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '6px', letterSpacing: '0.06em' }}>{label}</div>
+            ].map(({ label, value, color, icon }) => (
+              <div key={label} style={{ flex: '1', minWidth: '90px', padding: '10px 12px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  {icon && <Clock size={14} style={{ color }} />}
+                  <div style={{ fontSize: '20px', fontWeight: 800, color, lineHeight: 1 }}>{value}</div>
+                </div>
+                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', marginTop: '5px', letterSpacing: '0.05em' }}>{label}</div>
               </div>
             ))}
           </div>
 
           {/* Radar + Action Distribution */}
-          <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '16px', marginBottom: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '170px 1fr', gap: '10px', marginBottom: '10px' }}>
             {/* Radar chart */}
-            <div style={{ padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>Профиль</div>
-              <svg width="180" height="180" viewBox="0 0 180 180">
+            <div style={{ ...sectionCard, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div style={sectionTitle}>Профиль</div>
+              <svg width="150" height="150" viewBox="0 0 180 180">
                 {/* Grid rings */}
                 {[0.25, 0.5, 0.75, 1].map(f => (
                   <polygon key={f}
@@ -325,42 +327,42 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
             </div>
 
             {/* Action distribution */}
-            <div style={{ padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <div style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '12px' }}>Распределение действий</div>
-              {profile && profile.action_breakdown.length > 0 ? (
+            <div style={sectionCard}>
+              <div style={sectionTitle}>Распределение действий</div>
+              {hasActionData ? (
                 <>
                   {/* Segmented bar */}
-                  <div style={{ height: '12px', borderRadius: '6px', overflow: 'hidden', display: 'flex', marginBottom: '14px' }}>
-                    {profile.action_breakdown.map(a => (
+                  <div style={{ height: '10px', borderRadius: '5px', overflow: 'hidden', display: 'flex', marginBottom: '10px' }}>
+                    {profile!.action_breakdown.map(a => (
                       <div key={a.action} style={{ flex: a.c, background: ACTION_COLOR[a.action] || '#555', transition: 'flex 0.4s' }} />
                     ))}
                   </div>
                   {/* List */}
-                  {profile.action_breakdown.map(a => {
+                  {profile!.action_breakdown.map(a => {
                     const color = ACTION_COLOR[a.action] || '#aaa';
                     const pct = Math.round((a.c / totalAct) * 100);
                     return (
-                      <div key={a.action} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <div key={a.action} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                         <div style={{ width: '8px', height: '8px', borderRadius: '2px', background: color, flexShrink: 0 }} />
-                        <span style={{ flex: 1, fontSize: '12px', color: 'rgba(255,255,255,0.7)' }}>{ACTION_LABEL[a.action] || a.action}</span>
-                        <span style={{ fontSize: '13px', fontWeight: 700, color }}>{a.c}</span>
-                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', minWidth: '32px', textAlign: 'right' }}>{pct}%</span>
+                        <span style={{ flex: 1, fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>{ACTION_LABEL[a.action] || a.action}</span>
+                        <span style={{ fontSize: '12px', fontWeight: 700, color }}>{a.c}</span>
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', minWidth: '30px', textAlign: 'right' }}>{pct}%</span>
                       </div>
                     );
                   })}
                 </>
               ) : (
-                <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>Нет данных</div>
+                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>Нет данных</div>
               )}
             </div>
           </div>
 
           {/* 30-day activity chart */}
-          <div style={{ padding: '16px 18px', borderRadius: '16px', background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
-            <div style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '10px' }}>Активность за 30 дней</div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '48px' }}>
+          <div style={{ ...sectionCard, marginBottom: '10px' }}>
+            <div style={sectionTitle}>Активность за 30 дней</div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '40px' }}>
               {last30.map((d, i) => {
-                const h = d.c === 0 ? 2 : Math.max(4, (d.c / maxDayC) * 48);
+                const h = d.c === 0 ? 2 : Math.max(4, (d.c / maxDayC) * 40);
                 return (
                   <div key={i} title={`${d.day}: ${d.c}`}
                     style={{ flex: 1, height: `${h}px`, borderRadius: '2px 2px 0 0', background: d.c === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(160,112,255,0.6)', transition: 'background 0.15s' }}
@@ -373,26 +375,26 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
           </div>
 
           {/* Recent actions */}
-          <div style={{ padding: '16px 18px', borderRadius: '16px', background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.06)' }}>
-            <div style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '12px' }}>Последние действия</div>
-            {profile && profile.recent_actions.length > 0 ? profile.recent_actions.map((a, i) => {
-              const color = ACTION_COLOR[a.action] || '#888';
-              return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                  <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: `${color}18`, color, border: `1px solid ${color}28`, flexShrink: 0 }}>
-                    {ACTION_LABEL[a.action] || a.action}
-                  </span>
-                  <span style={{ flex: 1, fontSize: '12px', color: 'rgba(255,255,255,0.7)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {a.target_username}
-                  </span>
-                  <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', flexShrink: 0 }}>{a.channel_name}</span>
-                  <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.2)', flexShrink: 0 }}>{timeAgo(a.created_at)}</span>
-                </div>
-              );
-            }) : (
-              <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>Нет данных</div>
-            )}
-          </div>
+          {hasRecentData ? (
+            <div style={sectionCard}>
+              <div style={sectionTitle}>Последние действия</div>
+              {profile!.recent_actions.map((a, i) => {
+                const color = ACTION_COLOR[a.action] || '#888';
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                    <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: `${color}18`, color, border: `1px solid ${color}28`, flexShrink: 0 }}>
+                      {ACTION_LABEL[a.action] || a.action}
+                    </span>
+                    <span style={{ flex: 1, fontSize: '11px', color: 'rgba(255,255,255,0.7)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {a.target_username}
+                    </span>
+                    <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', flexShrink: 0 }}>{a.channel_name}</span>
+                    <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.2)', flexShrink: 0 }}>{timeAgo(a.created_at)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : emptyLine('Последние действия')}
         </div>
       </motion.div>
     </div>
