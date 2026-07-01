@@ -650,6 +650,7 @@ export class TwitchManager {
 
     const started = [...liveChannels].filter(ch => !openBeforeSet.has(ch));
     const ended = [...openBeforeSet].filter(ch => !liveChannels.has(ch));
+    logger.info(`[streams] sync: channels=${channelNames.length} [${channelNames.join(',')}] live=${liveStreams.length} [${[...liveChannels].join(',')}]`);
     return { started, ended, live: liveStreams.length };
   }
 
@@ -660,6 +661,7 @@ export class TwitchManager {
    */
   startStreamPoller(intervalMs = 60_000): void {
     if (this.streamPollerTimer) return;
+    logger.info('[streams] poller started');
     const tick = async () => {
       try {
         const { started, ended } = await this.syncStreams();
