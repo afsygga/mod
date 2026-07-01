@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutDashboard, ScrollText, Settings as SettingsIcon, Globe, Crown, Star, Gem, Shield, LogOut, ShieldCheck, Twitch, Menu, X, BarChart2, Radio } from 'lucide-react';
+import { LayoutDashboard, ScrollText, Settings as SettingsIcon, Globe, Crown, Star, Gem, Shield, LogOut, ShieldCheck, Twitch, Menu, X, BarChart2, Radio, Rocket } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
 import { Channel, ChatMessage, QueueItem, AppSettings } from './types';
 import { ChannelManager } from './components/ChannelManager/ChannelManager';
@@ -388,6 +388,20 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '8px' }}>
+          <button onClick={() => setShowPatchNotes(true)}
+            title={lang === 'ru' ? 'Что нового' : "What's new"}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              padding: isMobile ? '7px 8px' : '7px 12px', borderRadius: '10px',
+              fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+              background: 'rgba(160,112,255,0.1)', color: '#c49dff',
+              border: 'none', outline: 'none',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(160,112,255,0.2)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(160,112,255,0.1)')}>
+            <Rocket size={12} />{!isMobile && (lang === 'ru' ? 'Что нового' : "What's new")}
+          </button>
+
           {!isMobile && (
             <button onClick={() => setLang(l => l === 'en' ? 'ru' : 'en')}
               style={{
