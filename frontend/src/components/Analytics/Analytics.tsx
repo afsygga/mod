@@ -165,10 +165,19 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   const maxActDay = 50; // normalize: 50 actions/day = 100%
   const clamp100 = (v: number) => Math.max(0, Math.min(100, Number.isFinite(v) ? v : 0));
 
+  // Presence: active days relative to the observed period (since the mod's
+  // first action, capped at 30 days) — a newcomer active daily scores 100%,
+  // not activeDays/30 which reads as zero while history is short.
+  let observedDays = 30;
+  if (profile && profile.daily_activity.length > 0) {
+    const firstDay = new Date(profile.daily_activity[0].day).getTime();
+    observedDays = Math.max(1, Math.min(30, Math.ceil((Date.now() - firstDay) / 86400000)));
+  }
+
   const radarScores = {
     speed: avgRespSec !== null ? clamp100(100 - (avgRespSec / 600) * 100) : 50,
     activity: clamp100((actionsPerDay / maxActDay) * 100),
-    presence: clamp100((daysActive / 30) * 100),
+    presence: clamp100((daysActive / observedDays) * 100),
     harshness: clamp100((bans / Math.max(1, total)) * 100 * 10),
     mutes: clamp100((mutes / Math.max(1, total)) * 100 * 2),
   };
