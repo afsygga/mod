@@ -1113,6 +1113,240 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
   );
 }
 
+// ─── moderator activity chart ─────────────────────────────────────────────────
+interface ModActivityResp {
+  range: { from: string; to: string; bucket: '10min' | 'day' };
+  mods: { login: string; display_name: string; avatar: string | null; total: number; mutes: number; bans: number; unbans: number; deletes: number }[];
+  series: { bucket: string; mod_login: string; total: number; mutes: number; bans: number; unbans: number; deletes: number }[];
+}
+
+const MOD_PALETTE = ['#a070ff', '#00e5cc', '#ffc800', '#ff5959', '#00c878', '#ff9800'];
+const PERIODS: { key: string; label: string }[] = [
+  { key: 'stream', label: 'Стрим' },
+  { key: '7d', label: '7д' },
+  { key: '14d', label: '14д' },
+  { key: '30d', label: '30д' },
+];
+
+function ModActivityChart({ channel }: { channel: string }) {
+  const [period, setPeriod] = useState('7d');
+  const [data, setData] = useState<ModActivityResp | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!channel) return;
+    setLoading(true);
+    api.get<ModActivityResp>(`/api/admin/stats/mod-activity?channel=${encodeURIComponent(channel)}&period=${period}`)
+      .then(d => { setData(d); setHidden(new Set()); })
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [channel, period]);
+
+  const W = 800, H = 220, PAD_L = 34, PAD_B = 22, PAD_T = 8;
+  const CW = W - PAD_L - 6, CH = H - PAD_B - PAD_T;
+
+  // Build continuous buckets + per-mod series
+  const { buckets, topMods, seriesByMod } = React.useMemo(() => {
+    if (!data || data.mods.length === 0) return { buckets: [] as Date[], topMods: [] as ModActivityResp['mods'], seriesByMod: {} as Record<string, number[]> };
+    const stepMs = data.range.bucket === '10min' ? 10 * 60_000 : 24 * 3600_000;
+    const from = new Date(data.range.from).getTime();
+    const to = new Date(data.range.to).getTime();
+    // Align start to bucket boundary using the first series bucket if present, else floor
+    const floor = (t: number) => data.range.bucket === '10min'
+      ? Math.floor(t / stepMs) * stepMs
+      : new Date(new Date(t).toISOString().slice(0, 10) + 'T00:00:00Z').getTime();
+    const bkts: Date[] = [];
+    for (let t = floor(from); t <= to && bkts.length < 600; t += stepMs) bkts.push(new Date(t));
+    const top = data.mods.slice(0, 6);
+    const idxOf: Record<number, number> = {};
+    bkts.forEach((b, i) => { idxOf[b.getTime()] = i; });
+    const byMod: Record<string, number[]> = {};
+    for (const m of top) byMod[m.login] = new Array(bkts.length).fill(0);
+    for (const s of data.series) {
+      const arr = byMod[s.mod_login];
+      if (!arr) continue;
+      const i = idxOf[floor(new Date(s.bucket).getTime())];
+      if (i !== undefined) arr[i] += s.total;
+    }
+    return { buckets: bkts, topMods: top, seriesByMod: byMod };
+  }, [data]);
+
+  const visibleMods = topMods.filter(m => !hidden.has(m.login));
+  const maxY = Math.max(1, ...visibleMods.flatMap(m => seriesByMod[m.login] || [0]));
+  const isEmpty = !loading && (!data || topMods.length === 0 || topMods.every(m => (seriesByMod[m.login] || []).every(v => v === 0)));
+
+  const toX = (i: number) => buckets.length > 1 ? (i / (buckets.length - 1)) * CW : CW / 2;
+
+  const fmtBucket = (d: Date) => data?.range.bucket === '10min'
+    ? d.toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit' });
+
+  // X labels — ~6 evenly spaced
+  const xLabels: { i: number; text: string }[] = [];
+  if (buckets.length > 1) {
+    const n = Math.min(6, buckets.length);
+    for (let k = 0; k < n; k++) {
+      const i = Math.round((k / (n - 1)) * (buckets.length - 1));
+      xLabels.push({ i, text: fmtBucket(buckets[i]) });
+    }
+  }
+
+  const onMove = (e: React.MouseEvent) => {
+    const svg = svgRef.current, wrap = wrapRef.current;
+    if (!svg || !wrap || buckets.length < 2) return;
+    const rect = svg.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left - (PAD_L / W) * rect.width) / ((CW / W) * rect.width)));
+    const idx = Math.round(frac * (buckets.length - 1));
+    const wRect = wrap.getBoundingClientRect();
+    setHover({ idx, x: e.clientX - wRect.left, y: e.clientY - wRect.top });
+  };
+
+  const toggle = (login: string) => setHidden(prev => {
+    const next = new Set(prev);
+    if (next.has(login)) next.delete(login); else next.add(login);
+    return next;
+  });
+
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px', padding: '18px', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+          Активность модераторов
+        </div>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          {PERIODS.map(p => (
+            <button key={p.key} onClick={() => setPeriod(p.key)} style={{
+              padding: '5px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+              border: `1px solid ${period === p.key ? 'rgba(160,112,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
+              background: period === p.key ? 'rgba(160,112,255,0.14)' : 'rgba(255,255,255,0.03)',
+              color: period === p.key ? '#c9a8ff' : 'rgba(255,255,255,0.4)',
+            }}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.25)' }}>
+          Загрузка...
+        </div>
+      ) : isEmpty ? (
+        <div style={{ padding: '30px 0', textAlign: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.25)' }}>
+          Нет действий за период
+        </div>
+      ) : (
+        <>
+          <div ref={wrapRef} style={{ position: 'relative' }}>
+            <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', display: 'block' }}
+              onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+              {/* gridlines */}
+              {[0.25, 0.5, 0.75, 1.0].map(g => (
+                <line key={g} x1={PAD_L} x2={PAD_L + CW} y1={PAD_T + CH - g * CH} y2={PAD_T + CH - g * CH}
+                  stroke="rgba(255,255,255,0.05)" strokeDasharray="4 5" />
+              ))}
+              <text x={PAD_L - 6} y={PAD_T + 10} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.25)">{maxY}</text>
+              <text x={PAD_L - 6} y={PAD_T + CH} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.25)">0</text>
+
+              {/* lines */}
+              <g transform={`translate(${PAD_L}, ${PAD_T})`}>
+                {topMods.map((m, mi) => {
+                  if (hidden.has(m.login)) return null;
+                  const arr = seriesByMod[m.login] || [];
+                  const pts: [number, number][] = arr.map((v, i) => [i, v]);
+                  const path = smoothLinePath(pts, CW, CH, maxY);
+                  return (
+                    <path key={m.login} d={path} fill="none" stroke={MOD_PALETTE[mi % MOD_PALETTE.length]}
+                      strokeWidth="1.8" strokeLinecap="round" opacity={0.9} />
+                  );
+                })}
+                {/* crosshair */}
+                {hover && buckets.length > 1 && (
+                  <line x1={toX(hover.idx)} x2={toX(hover.idx)} y1={0} y2={CH} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 4" />
+                )}
+                {/* hover dots */}
+                {hover && topMods.map((m, mi) => {
+                  if (hidden.has(m.login)) return null;
+                  const v = (seriesByMod[m.login] || [])[hover.idx] || 0;
+                  if (v === 0) return null;
+                  return <circle key={m.login} cx={toX(hover.idx)} cy={CH - (v / maxY) * CH} r="3"
+                    fill={MOD_PALETTE[mi % MOD_PALETTE.length]} stroke="rgba(0,0,0,0.6)" strokeWidth="1" />;
+                })}
+              </g>
+
+              {/* x labels */}
+              {xLabels.map(({ i, text }, k) => (
+                <text key={k} x={PAD_L + toX(i)} y={H - 6} fontSize="10" fill="rgba(255,255,255,0.25)"
+                  textAnchor={k === 0 ? 'start' : k === xLabels.length - 1 ? 'end' : 'middle'}>
+                  {text}
+                </text>
+              ))}
+            </svg>
+
+            {/* tooltip */}
+            {hover && buckets[hover.idx] && (() => {
+              const rows = topMods
+                .filter(m => !hidden.has(m.login))
+                .map((m, mi) => ({ m, mi, v: (seriesByMod[m.login] || [])[hover.idx] || 0 }))
+                .filter(r => r.v > 0)
+                .sort((a, b) => b.v - a.v);
+              if (rows.length === 0) return null;
+              const flip = hover.x > (wrapRef.current?.clientWidth || 800) - 180;
+              return (
+                <div style={{
+                  position: 'absolute', left: hover.x + (flip ? -12 : 12), top: Math.max(0, hover.y - 20),
+                  transform: flip ? 'translateX(-100%)' : 'none',
+                  background: 'rgba(18,18,24,0.97)', border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '10px', padding: '8px 11px', pointerEvents: 'none', zIndex: 10, minWidth: '130px',
+                }}>
+                  <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginBottom: '5px', fontWeight: 600 }}>
+                    {fmtBucket(buckets[hover.idx])}
+                  </div>
+                  {rows.map(({ m, mi, v }) => (
+                    <div key={m.login} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '1.5px 0' }}>
+                      <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: MOD_PALETTE[mi % MOD_PALETTE.length], flexShrink: 0 }} />
+                      <span style={{ flex: 1, fontSize: '11px', color: 'rgba(255,255,255,0.75)', whiteSpace: 'nowrap' }}>{m.display_name}</span>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>{v}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* legend */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', marginTop: '12px' }}>
+            {topMods.map((m, mi) => {
+              const color = MOD_PALETTE[mi % MOD_PALETTE.length];
+              const off = hidden.has(m.login);
+              return (
+                <div key={m.login} onClick={() => toggle(m.login)} style={{
+                  display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer',
+                  opacity: off ? 0.35 : 1, paddingBottom: '2px', borderBottom: `2px solid ${off ? 'transparent' : color}`,
+                }}>
+                  {m.avatar ? (
+                    <img src={m.avatar} alt="" style={{ width: '16px', height: '16px', borderRadius: '50%', display: 'block' }} />
+                  ) : (
+                    <span style={{ width: '16px', height: '16px', borderRadius: '50%', background: 'rgba(255,255,255,0.08)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.5)' }}>
+                      {m.display_name[0]?.toUpperCase()}
+                    </span>
+                  )}
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.75)' }}>{m.display_name}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color }}>{m.total}</span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── main ─────────────────────────────────────────────────────────────────────
 export function Analytics({ initialSection, streamEventTick }: { initialSection?: 'mods' | 'streams'; streamEventTick?: number } = {}) {
   const [channels, setChannels] = useState<string[]>([]);
@@ -1264,6 +1498,9 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                 <RotateCcw size={11} /> Обновить
               </button>
             </div>
+
+            {/* Activity chart */}
+            {selectedChannel && <ModActivityChart channel={selectedChannel} />}
 
             {/* Table header */}
             {!modsLoading && mods.length > 0 && (

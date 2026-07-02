@@ -307,7 +307,8 @@ adminRouter.get('/channels/:channel/moderators', async (req: Request, res: Respo
     const metaMap: Record<string, { avatar: string | null; displayName: string }> = {};
     for (const r of cachedMeta) metaMap[r.username] = { avatar: r.profile_image_url, displayName: r.display_name || r.username };
 
-    const missing = logins.filter(l => !metaMap[l]);
+    // Re-fetch entries cached without an avatar (e.g. rows inserted with only twitch_id)
+    const missing = logins.filter(l => !metaMap[l] || !metaMap[l].avatar);
     if (missing.length > 0 && tm) {
       // Fetch in batches of 100
       for (let i = 0; i < missing.length; i += 100) {
@@ -410,6 +411,90 @@ adminRouter.get('/stats/moderators', async (req: Request, res: Response) => {
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'moderator stats failed' });
+  }
+});
+
+// Moderator activity over time — bucketed series per moderator
+// ?channel=<name>&period=<stream|7d|14d|30d>
+adminRouter.get('/stats/mod-activity', async (req: Request, res: Response) => {
+  try {
+    const channel = req.query.channel as string;
+    const period = (req.query.period as string) || '7d';
+    if (!channel) return res.status(400).json({ error: 'channel required' });
+
+    let from: Date;
+    let to: Date = new Date();
+    let bucket: '10min' | 'day' = 'day';
+
+    if (period === 'stream') {
+      bucket = '10min';
+      const { rows: [sess] } = await db.query(
+        `SELECT started_at, COALESCE(ended_at, NOW()) AS ended_at
+         FROM stream_sessions WHERE channel_name=$1
+         ORDER BY started_at DESC LIMIT 1`, [channel]);
+      if (sess) {
+        from = new Date(sess.started_at);
+        to = new Date(sess.ended_at);
+      } else {
+        from = new Date(Date.now() - 24 * 3600 * 1000);
+      }
+    } else {
+      const days = period === '30d' ? 30 : period === '14d' ? 14 : 7;
+      from = new Date(Date.now() - days * 24 * 3600 * 1000);
+    }
+
+    const bucketExpr = bucket === '10min'
+      ? `date_trunc('minute', ml.created_at) - (EXTRACT(minute FROM ml.created_at)::int % 10) * INTERVAL '1 minute'`
+      : `date_trunc('day', ml.created_at)`;
+
+    const { rows: series } = await db.query(`
+      SELECT ${bucketExpr} AS bucket,
+        LOWER(COALESCE(u.twitch_username, ml.performed_by)) AS mod_login,
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE ml.action IN ('MUTED','AUTO_MUTED'))::int AS mutes,
+        COUNT(*) FILTER (WHERE ml.action='BANNED')::int AS bans,
+        COUNT(*) FILTER (WHERE ml.action='UNBANNED')::int AS unbans,
+        COUNT(*) FILTER (WHERE ml.action='FLAGGED')::int AS deletes
+      FROM moderation_logs ml
+      LEFT JOIN users u ON u.email = ml.performed_by
+      WHERE ml.channel_name=$1 AND ml.created_at BETWEEN $2 AND $3
+        AND ml.performed_by NOT IN ('AUTO','console','bulk','dashboard')
+      GROUP BY bucket, mod_login
+      ORDER BY bucket
+    `, [channel, from, to]);
+
+    const { rows: modRows } = await db.query(`
+      SELECT
+        LOWER(COALESCE(u.twitch_username, ml.performed_by)) AS login,
+        MAX(tm.display_name) AS display_name,
+        MAX(tm.profile_image_url) AS avatar,
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE ml.action IN ('MUTED','AUTO_MUTED'))::int AS mutes,
+        COUNT(*) FILTER (WHERE ml.action='BANNED')::int AS bans,
+        COUNT(*) FILTER (WHERE ml.action='UNBANNED')::int AS unbans,
+        COUNT(*) FILTER (WHERE ml.action='FLAGGED')::int AS deletes
+      FROM moderation_logs ml
+      LEFT JOIN users u ON u.email = ml.performed_by
+      LEFT JOIN twitch_user_meta tm ON tm.username = LOWER(COALESCE(u.twitch_username, ml.performed_by))
+      WHERE ml.channel_name=$1 AND ml.created_at BETWEEN $2 AND $3
+        AND ml.performed_by NOT IN ('AUTO','console','bulk','dashboard')
+      GROUP BY LOWER(COALESCE(u.twitch_username, ml.performed_by))
+      ORDER BY total DESC
+    `, [channel, from, to]);
+
+    res.json({
+      range: { from: from.toISOString(), to: to.toISOString(), bucket },
+      mods: modRows.map((m: any) => ({
+        login: m.login,
+        display_name: m.display_name || m.login,
+        avatar: m.avatar || null,
+        total: m.total, mutes: m.mutes, bans: m.bans, unbans: m.unbans, deletes: m.deletes,
+      })),
+      series,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'mod activity failed' });
   }
 });
 
