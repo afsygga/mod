@@ -69,8 +69,10 @@ export class TwitchManager {
       return existing;
     }
 
-    // Replace existing connection
+    // Replace existing connection — remove listeners FIRST so a lingering or
+    // auto-reconnecting old client can never double-process messages
     if (existing?.client) {
+      try { existing.client.removeAllListeners(); } catch {}
       try { await existing.client.disconnect(); } catch {}
     }
     // Always invalidate moderator_id cache on any credential change
@@ -143,6 +145,8 @@ export class TwitchManager {
     this.connections.delete(email);
   }
 
+  private seenMsgIds = new Set<string>();
+
   private async handleMessage(ownerEmail: string | null, channelRaw: string, userstate: tmi.ChatUserstate, message: string, self: boolean) {
     if (self) return;
     const channelName = channelRaw.replace('#', '');
@@ -158,6 +162,18 @@ export class TwitchManager {
       if (ownerEmail !== state.primaryEmail) return;
     } else {
       if (ownerEmail !== null) return;
+    }
+
+    // Hard dedupe by Twitch message id — protects against any duplicate source
+    // (stale client that survived a reconnect, double listeners, etc.)
+    const msgId = (userstate as any).id as string | undefined;
+    if (msgId) {
+      if (this.seenMsgIds.has(msgId)) return;
+      this.seenMsgIds.add(msgId);
+      if (this.seenMsgIds.size > 5000) {
+        const it = this.seenMsgIds.values();
+        for (let i = 0; i < 1000; i++) this.seenMsgIds.delete(it.next().value as string);
+      }
     }
 
     // !g <game name> — set game/category (only for broadcaster or mods with OAuth)

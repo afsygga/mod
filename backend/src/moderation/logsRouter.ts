@@ -41,6 +41,7 @@ logsRouter.get('/', async (req: Request, res: Response) => {
 });
 
 logsRouter.delete('/:id', async (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'admin required' });
   try {
     await db.query('DELETE FROM moderation_logs WHERE id=$1', [parseInt(req.params.id)]);
     res.json({ success: true });
@@ -50,16 +51,9 @@ logsRouter.delete('/:id', async (req: Request, res: Response) => {
 });
 
 logsRouter.delete('/', async (req: Request, res: Response) => {
-  const isAdmin = req.user?.role === 'admin';
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'admin required' });
   try {
-    if (isAdmin) {
-      await db.query('TRUNCATE moderation_logs RESTART IDENTITY');
-    } else {
-      const owned = await getOwnedChannels(req.user?.email);
-      if (owned.length > 0) {
-        await db.query('DELETE FROM moderation_logs WHERE channel_name = ANY($1)', [owned]);
-      }
-    }
+    await db.query('TRUNCATE moderation_logs RESTART IDENTITY');
     res.json({ success: true });
   } catch {
     res.status(500).json({ error: 'Internal server error' });

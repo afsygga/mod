@@ -135,7 +135,7 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   useEffect(() => {
     const username = mod.twitch_login;
     const ch = profileChannel || '';
-    api.get<ModProfile>(`/api/admin/moderators/${encodeURIComponent(username)}/profile?channel=${encodeURIComponent(ch)}`)
+    api.get<ModProfile>(`/api/analytics/moderators/${encodeURIComponent(username)}/profile?channel=${encodeURIComponent(ch)}`)
       .then(setProfile).catch(() => {});
   }, [mod.twitch_login, profileChannel]);
 
@@ -155,18 +155,22 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   };
 
   // Radar scores (0-100 each)
-  const avgRespSec = profile?.avg_response_sec || null;
-  const daysActive = profile ? new Set(profile.daily_activity.map(d => d.day)).size : 0;
-  const totalActions30 = profile ? profile.daily_activity.reduce((s, d) => s + d.c, 0) : 0;
+  const avgRespRaw = profile?.avg_response_sec;
+  const avgRespSec = avgRespRaw !== null && avgRespRaw !== undefined && !Number.isNaN(Number(avgRespRaw))
+    ? Number(avgRespRaw) : null;
+  // Each daily_activity row is one calendar day with ≥1 action (last 30 days)
+  const daysActive = profile ? profile.daily_activity.filter(d => (Number(d.c) || 0) > 0).length : 0;
+  const totalActions30 = profile ? profile.daily_activity.reduce((s, d) => s + (Number(d.c) || 0), 0) : 0;
   const actionsPerDay = daysActive > 0 ? totalActions30 / daysActive : 0;
   const maxActDay = 50; // normalize: 50 actions/day = 100%
+  const clamp100 = (v: number) => Math.max(0, Math.min(100, Number.isFinite(v) ? v : 0));
 
   const radarScores = {
-    speed: avgRespSec !== null ? Math.max(0, Math.min(100, 100 - (avgRespSec / 600) * 100)) : 50,
-    activity: Math.min(100, (actionsPerDay / maxActDay) * 100),
-    presence: Math.min(100, (daysActive / 30) * 100),
-    harshness: Math.min(100, (bans / Math.max(1, total)) * 100 * 10),
-    mutes: Math.min(100, (mutes / Math.max(1, total)) * 100 * 2),
+    speed: avgRespSec !== null ? clamp100(100 - (avgRespSec / 600) * 100) : 50,
+    activity: clamp100((actionsPerDay / maxActDay) * 100),
+    presence: clamp100((daysActive / 30) * 100),
+    harshness: clamp100((bans / Math.max(1, total)) * 100 * 10),
+    mutes: clamp100((mutes / Math.max(1, total)) * 100 * 2),
   };
 
   // SVG pentagon radar
@@ -699,7 +703,9 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
       let frac = 0.5;
       if (svgEl) {
         const rect = svgEl.getBoundingClientRect();
-        frac = Math.max(0, Math.min(1, (e.clientX - rect.left - Y_LABEL_W) / CHART_W));
+        // Convert screen px → viewBox units before subtracting viewBox-space margins
+        const vbX = (e.clientX - rect.left) * (W / rect.width);
+        frac = Math.max(0, Math.min(1, (vbX - Y_LABEL_W) / CHART_W));
       }
       const anchor = vs + frac * range;
       let newVs = Math.round(anchor - frac * newRange);
@@ -751,7 +757,8 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   const onPanMove = (e: React.MouseEvent) => {
     if (!panning || !panStartRef.current || !svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
-    const pxPerIdx = rect.width / Math.max(1, viewEnd - viewStart);
+    // Screen px per data index: chart width (viewBox units) scaled to screen px
+    const pxPerIdx = (CHART_W * (rect.width / W)) / Math.max(1, viewEnd - viewStart);
     const dx = Math.round((panStartRef.current.clientX - e.clientX) / pxPerIdx);
     if (dx === 0) return;
     const range = panStartRef.current.viewEnd - panStartRef.current.viewStart;
@@ -787,7 +794,8 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   // Tooltip hover
   const onSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
-    const px = e.clientX - rect.left - Y_LABEL_W;
+    // Convert screen px → viewBox units so the crosshair matches the cursor
+    const px = (e.clientX - rect.left) * (W / rect.width) - Y_LABEL_W;
     const fraction = Math.max(0, Math.min(1, px / CHART_W));
     const idx = Math.round(fraction * (viewData.length - 1));
     const svgX = Y_LABEL_W + (idx / Math.max(1, viewData.length - 1)) * CHART_W;
@@ -1286,7 +1294,7 @@ function ModActivityChart({ channel }: { channel: string }) {
   useEffect(() => {
     if (!channel) return;
     setLoading(true);
-    api.get<ModActivityResp>(`/api/admin/stats/mod-activity?channel=${encodeURIComponent(channel)}&period=${period}`)
+    api.get<ModActivityResp>(`/api/analytics/stats/mod-activity?channel=${encodeURIComponent(channel)}&period=${period}`)
       .then(d => { setData(d); setHidden(new Set()); })
       .catch(() => setData(null))
       .finally(() => setLoading(false));
@@ -1803,7 +1811,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   }, [streamEventTick]);
 
   const loadModsFromLogs = useCallback((ch: string) => {
-    api.get<any[]>(`/api/admin/stats/moderators?channel=${encodeURIComponent(ch)}`)
+    api.get<any[]>(`/api/analytics/stats/moderators?channel=${encodeURIComponent(ch)}`)
       .then(data => {
         const converted: TwitchMod[] = (data || []).map((m: any) => ({
           twitch_login: m.twitch_username || m.twitch_display_name || m.display_name || '—',
@@ -1827,7 +1835,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
     if (!ch) return;
     setModsLoading(true);
     setModsError(null);
-    api.get<any>(`/api/admin/channels/${encodeURIComponent(ch)}/moderators`)
+    api.get<any>(`/api/analytics/channels/${encodeURIComponent(ch)}/moderators`)
       .then(data => {
         if (Array.isArray(data)) { setMods(data); setModsError(null); setModsLoading(false); }
         else loadModsFromLogs(ch);

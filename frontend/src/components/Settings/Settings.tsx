@@ -277,6 +277,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
   const [saved, setSaved] = useState(false);
   const [activeSection, setActiveSection] = useState('detection');
   const contentRef = useRef<HTMLDivElement>(null);
+  const spySuppressUntilRef = useRef(0); // suppress scroll-spy while click-triggered smooth scroll runs
   const t = T[lang];
 
   // Dirty = current differs from last-saved baseline
@@ -349,6 +350,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
     if (!root) return;
     const ids = sections.map(s => s.id);
     const observer = new IntersectionObserver((entries) => {
+      if (Date.now() < spySuppressUntilRef.current) return;
       const visible = entries.filter(e => e.isIntersecting)
         .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
       if (visible.length > 0) {
@@ -382,6 +384,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
           return (
             <button key={id} onClick={() => {
               setActiveSection(id);
+              spySuppressUntilRef.current = Date.now() + 900;
               document.getElementById(`sec-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }}
               style={{

@@ -19,6 +19,7 @@ import { moderationRouter } from './moderation/moderationRouter';
 import { settingsRouter } from './channels/settingsRouter';
 import { logsRouter } from './moderation/logsRouter';
 import { streamsRouter } from './moderation/streamsRouter';
+import { analyticsRouter } from './moderation/analyticsRouter';
 import { authRouter } from './auth/authRouter';
 import { twitchCredsRouter } from './auth/twitchCredsRouter';
 import { twitchOAuthRouter } from './auth/twitchOAuthRouter';
@@ -86,6 +87,7 @@ app.use('/api/moderation', authenticate, moderationRouter);
 app.use('/api/settings', authenticate, settingsRouter);
 app.use('/api/logs', authenticate, logsRouter);
 app.use('/api/streams', authenticate, streamsRouter);
+app.use('/api/analytics', authenticate, analyticsRouter);
 
 wsHandler(wss);
 

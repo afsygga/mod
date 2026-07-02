@@ -3,6 +3,7 @@ import { Search, Filter, RefreshCw, Tv2, User, AlertTriangle, Ban, Volume2, Tras
 import { motion, AnimatePresence } from 'framer-motion';
 import { ModerationLog } from '../../types';
 import { api } from '../../hooks/useApi';
+import { useAuth } from '../../hooks/useAuth';
 import { T, Lang } from '../../utils/i18n';
 import { Footer } from '../Footer/Footer';
 
@@ -11,7 +12,7 @@ const ACTION_STYLES: Record<string, { bg: string; color: string; icon: any; labe
   AUTO_MUTED: { bg: 'rgba(255,152,0,0.12)',  color: '#ff9800', icon: Volume2,        label: 'Авто',  labelEn: 'Auto' },
   BANNED:     { bg: 'rgba(255,89,89,0.12)',  color: '#ff5959', icon: Ban,            label: 'Бан',   labelEn: 'Ban' },
   UNBANNED:   { bg: 'rgba(0,200,120,0.12)',  color: '#00c878', icon: RotateCcw,      label: 'Разбан', labelEn: 'Unban' },
-  FLAGGED:    { bg: 'rgba(160,112,255,0.12)',color: '#a070ff', icon: AlertTriangle,  label: 'Флаг',  labelEn: 'Flag' },
+  FLAGGED:    { bg: 'rgba(160,112,255,0.12)',color: '#a070ff', icon: AlertTriangle,  label: 'Удаление', labelEn: 'Deleted' },
 };
 
 function actionLabel(action: string, lang: Lang): string {
@@ -57,6 +58,8 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [unbanning, setUnbanning] = useState<Record<number, 'loading' | 'done'>>({});
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const t = T[lang];
 
   const PAGE_SIZE = 500;
@@ -114,30 +117,47 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
 
   const exportTxt = () => {
     const pad = (n: number) => String(n).padStart(2, '0');
-    const fmt = (iso: string) => {
-      const d = new Date(iso);
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    };
     const now = new Date();
-    const filters: string[] = [];
-    if (search.trim()) filters.push(`поиск="${search.trim()}"`);
-    filters.push(`действие=${actionFilter}`);
-    filters.push(`канал=${channelFilter}`);
-    filters.push(`период=${dateFilter}`);
+
+    const fmtShort = (iso: string) => {
+      const d = new Date(iso);
+      return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+    const fmtDur = (s: number | null | undefined) => {
+      if (!s) return '';
+      if (s < 60) return `${s}с`;
+      if (s < 3600) return `${Math.round(s / 60)}м`;
+      if (s < 86400) return `${Math.round(s / 3600)}ч`;
+      return `${Math.round(s / 86400)}д`;
+    };
+    const actionRu = (l: ModerationLog) => {
+      switch (l.action) {
+        case 'MUTED': return `МУТ${l.duration_seconds ? ' ' + fmtDur(l.duration_seconds) : ''}`;
+        case 'AUTO_MUTED': return `АВТОМУТ${l.duration_seconds ? ' ' + fmtDur(l.duration_seconds) : ''}`;
+        case 'BANNED': return 'БАН';
+        case 'UNBANNED': return 'РАЗБАН';
+        case 'FLAGGED': return 'УДАЛЕНИЕ';
+        default: return l.action;
+      }
+    };
+    const ruFilter = (v: string) => v === 'all' ? 'все' : v;
+    const ruPeriod = (v: string) => v === 'all' ? 'всё' : v === 'today' ? 'сегодня' : v;
+
+    const actionW = Math.max(9, ...filtered.map(l => actionRu(l).length)) + 2;
+    const channelW = Math.max(7, ...filtered.map(l => l.channel_name.length)) + 2;
+    const userW = Math.max(8, ...filtered.map(l => l.username.length)) + 2;
 
     const header = [
-      '=== Экспорт логов модерации ===',
-      `Дата экспорта: ${fmt(now.toISOString())}`,
-      `Фильтры: ${filters.join(', ')}`,
-      `Всего записей: ${filtered.length}`,
-      '='.repeat(40),
+      'МОДЕРАЦИЯ — ЭКСПОРТ ЛОГОВ',
+      `Дата: ${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}   Записей: ${filtered.length}`,
+      `Фильтры: действие=${ruFilter(actionFilter)} · канал=${ruFilter(channelFilter)} · период=${ruPeriod(dateFilter)}`,
+      '─'.repeat(40),
       '',
     ].join('\n');
 
     const body = filtered.map(l => {
       const moderator = l.performed_by_display || l.performed_by || '—';
-      const reasons = (l.reasons && l.reasons.length > 0) ? l.reasons.join('; ') : '—';
-      return `[${fmt(l.created_at)}] ${l.action} | ${l.channel_name} | ${l.username} | mod: ${moderator} | score ${l.spam_score ?? 0} | ${reasons} | ${l.message || '—'}`;
+      return `${fmtShort(l.created_at)}  ${actionRu(l).padEnd(actionW)}${l.channel_name.padEnd(channelW)}${l.username.padEnd(userW)}(модер: ${moderator})`;
     }).join('\n');
 
     const content = header + body + (body ? '\n' : '');
@@ -206,7 +226,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
           { num: stats.total, label: lang === 'ru' ? 'Всего' : 'Total', color: 'rgba(255,255,255,0.9)' },
           { num: stats.muted, label: lang === 'ru' ? 'Муты' : 'Mutes', color: '#a070ff' },
           { num: stats.banned, label: lang === 'ru' ? 'Баны' : 'Bans', color: '#ff7070' },
-          { num: stats.flagged, label: lang === 'ru' ? 'Помечено' : 'Flagged', color: '#ffc800' },
+          { num: stats.flagged, label: lang === 'ru' ? 'Удалений' : 'Deleted', color: '#ffc800' },
           { num: stats.auto, label: lang === 'ru' ? 'Авто' : 'Auto', color: '#ff9800' },
           { num: stats.today, label: lang === 'ru' ? 'За сегодня' : 'Today', color: '#00e5cc' },
         ].map(({ num, label, color }) => (
@@ -322,7 +342,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
           {lang === 'ru' ? 'Экспорт .txt' : 'Export .txt'}
         </button>
 
-        <button onClick={() => setConfirmDelete({ all: true })} disabled={logs.length === 0} style={{
+        {isAdmin && <button onClick={() => setConfirmDelete({ all: true })} disabled={logs.length === 0} style={{
           padding: '7px 9px', borderRadius: '10px', cursor: logs.length === 0 ? 'default' : 'pointer',
           background: 'rgba(240,71,71,0.08)', border: 'none', outline: 'none',
           display: 'flex', alignItems: 'center', opacity: logs.length === 0 ? 0.4 : 1,
@@ -330,7 +350,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
         onMouseEnter={e => { if (logs.length > 0) e.currentTarget.style.background = 'rgba(240,71,71,0.18)'; }}
         onMouseLeave={e => (e.currentTarget.style.background = 'rgba(240,71,71,0.08)')}>
           <Trash2 size={12} style={{ color: '#ff7070' }} />
-        </button>
+        </button>}
 
         <div style={{
           fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginLeft: 'auto',
@@ -535,16 +555,18 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
                 </button>
               ) : <div />}
 
-              {/* Delete */}
-              <button onClick={() => setConfirmDelete({ id: log.id })} style={{
-                padding: '4px', borderRadius: '6px', background: 'transparent',
-                border: 'none', outline: 'none', cursor: 'pointer', opacity: 0.5,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = 'rgba(255,89,89,0.15)'; }}
-              onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.background = 'transparent'; }}>
-                <Trash2 size={11} style={{ color: '#ff5959' }} />
-              </button>
+              {/* Delete — admin only */}
+              {isAdmin ? (
+                <button onClick={() => setConfirmDelete({ id: log.id })} style={{
+                  padding: '4px', borderRadius: '6px', background: 'transparent',
+                  border: 'none', outline: 'none', cursor: 'pointer', opacity: 0.5,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = 'rgba(255,89,89,0.15)'; }}
+                onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.background = 'transparent'; }}>
+                  <Trash2 size={11} style={{ color: '#ff5959' }} />
+                </button>
+              ) : <div />}
             </div>
           );
         })}

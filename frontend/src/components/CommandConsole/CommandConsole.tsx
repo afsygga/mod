@@ -95,7 +95,7 @@ export function CommandConsole({ channel, lang }: Props) {
         animate={{ scale: 1, opacity: 1 }}
         onClick={() => setOpen(true)}
         style={{
-          position: 'fixed', bottom: '20px', right: '20px',
+          position: 'fixed', bottom: '40px', right: '20px',
           width: '44px', height: '44px', borderRadius: '12px',
           background: 'rgba(8,8,12,0.85)',
           backdropFilter: 'blur(20px)',
@@ -119,7 +119,7 @@ export function CommandConsole({ channel, lang }: Props) {
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         style={{
-          position: 'fixed', bottom: '20px', right: '20px',
+          position: 'fixed', bottom: '40px', right: '20px',
           width: '200px', height: '36px',
           background: 'rgba(8,8,12,0.85)',
           backdropFilter: 'blur(20px)',
@@ -149,7 +149,7 @@ export function CommandConsole({ channel, lang }: Props) {
       exit={{ scale: 0.95, opacity: 0, y: 10 }}
       transition={{ type: 'spring', stiffness: 320, damping: 28 }}
       style={{
-        position: 'fixed', bottom: '20px', right: '20px',
+        position: 'fixed', bottom: '40px', right: '20px',
         width: '380px', height: '360px',
         background: 'rgba(8,8,12,0.92)',
         backdropFilter: 'blur(28px) saturate(180%)',

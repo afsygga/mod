@@ -4,6 +4,7 @@ import {
   Users, Mail, Tv2, Activity, BarChart3, Trash2, Shield, ShieldOff,
   UserPlus, Search, Crown, X, Plus, TrendingUp, MessageSquare, Zap,
   VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown, Circle, Clock, Wifi, ShieldCheck, ScrollText,
+  RefreshCw,
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
@@ -85,6 +86,7 @@ const ACTION_META: Record<string, { color: string; bg: string; icon: any; label:
   AUTO_MUTED: { color: '#ff9800', bg: 'rgba(255,152,0,0.1)',    icon: Zap,        label: 'Авто-мут' },
   BANNED:     { color: '#ff5959', bg: 'rgba(240,71,71,0.1)',    icon: Ban,        label: 'Бан' },
   UNBANNED:   { color: '#00c878', bg: 'rgba(0,200,120,0.1)',    icon: RotateCcw,  label: 'Разбан' },
+  FLAGGED:    { color: '#a070ff', bg: 'rgba(160,112,255,0.12)', icon: AlertTriangle, label: 'Удаление' },
 };
 
 interface LiveStats {
@@ -1087,51 +1089,237 @@ function ChannelsTab() {
 // ============================================================================
 // LOGS — all
 // ============================================================================
+function formatLogDuration(s: number | null): string {
+  if (!s) return '—';
+  if (s < 60) return `${s}с`;
+  if (s < 3600) return `${Math.round(s / 60)}м`;
+  if (s < 86400) return `${Math.round(s / 3600)}ч`;
+  return `${Math.round(s / 86400)}д`;
+}
+
+const LOGS_ACTION_FILTERS: Array<{ key: string; label: string }> = [
+  { key: 'all', label: 'Все' },
+  { key: 'MUTED', label: 'Мут' },
+  { key: 'AUTO_MUTED', label: 'Авто' },
+  { key: 'BANNED', label: 'Бан' },
+  { key: 'UNBANNED', label: 'Разбан' },
+  { key: 'FLAGGED', label: 'Удаление' },
+];
+
 function LogsTab() {
   const [logs, setLogs] = useState<any[]>([]);
+  const [actionFilter, setActionFilter] = useState('all');
+  const [channelFilter, setChannelFilter] = useState('all');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = () => {
+    setRefreshing(true);
+    api.get<any[]>('/api/admin/logs?limit=500').then(setLogs).catch(console.error)
+      .finally(() => setRefreshing(false));
+  };
 
   useEffect(() => {
-    api.get<any[]>('/api/admin/logs?limit=500').then(setLogs).catch(console.error);
+    load();
+    const i = setInterval(load, 15000);
+    return () => clearInterval(i);
   }, []);
+
+  const channels = Array.from(new Set(logs.map(l => l.channel_name))).sort();
+  const filtered = logs.filter(l =>
+    (actionFilter === 'all' || l.action === actionFilter) &&
+    (channelFilter === 'all' || l.channel_name === channelFilter)
+  );
+
+  const GRID = '78px 100px 100px minmax(100px,130px) minmax(100px,130px) 46px minmax(120px,1fr) minmax(90px,150px) 48px';
+  const pad = (n: number) => String(n).padStart(2, '0');
 
   return (
     <div>
       <h2 style={{ fontSize: '22px', fontWeight: 700, marginBottom: '4px' }}>Все логи</h2>
-      <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>
-        Действия модерации со всех каналов
+      <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '14px' }}>
+        Действия модерации со всех каналов · авто-обновление 15с
       </p>
 
-      <div className="glass-card" style={{ overflow: 'hidden' }}>
-        {logs.length === 0 ? (
-          <div style={{ padding: '32px', textAlign: 'center', color: 'rgba(255,255,255,0.3)' }}>Нет логов</div>
-        ) : logs.slice(0, 200).map(l => (
-          <div key={l.id} style={{
-            display: 'flex', alignItems: 'center', gap: '10px',
-            padding: '8px 16px', borderBottom: '1px solid rgba(255,255,255,0.03)',
-            fontSize: '12px',
+      {/* Filters */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        {LOGS_ACTION_FILTERS.map(({ key, label }) => {
+          const active = actionFilter === key;
+          const meta = key === 'all' ? null : ACTION_META[key];
+          return (
+            <button key={key} onClick={() => setActionFilter(key)} style={{
+              padding: '6px 11px', borderRadius: '8px', fontSize: '11px', fontWeight: 600,
+              cursor: 'pointer', border: 'none', outline: 'none',
+              background: active ? (meta?.bg || 'rgba(255,255,255,0.08)') : 'rgba(255,255,255,0.02)',
+              color: active ? (meta?.color || '#ffffff') : 'rgba(255,255,255,0.45)',
+            }}>
+              {label}
+            </button>
+          );
+        })}
+        {channels.length > 1 && (
+          <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)} style={{
+            background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', outline: 'none',
+            color: 'rgba(255,255,255,0.7)', fontSize: '12px', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer',
           }}>
-            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', minWidth: '56px' }}>
-              {new Date(l.created_at).toLocaleTimeString()}
-            </span>
-            <span style={{
-              fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', minWidth: '76px', textAlign: 'center',
-              background: l.action === 'BANNED' ? 'rgba(240,71,71,0.15)' : 'rgba(140,80,255,0.12)',
-              color: l.action === 'BANNED' ? '#ff7070' : '#a070ff',
-            }}>{l.action}</span>
-            <span style={{ color: '#ffc800', minWidth: '90px' }}>📺 {l.channel_name}</span>
-            <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)', minWidth: '120px' }}>{l.username}</span>
-            {l.spam_score > 0 && (
-              <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '6px', background: 'rgba(255,200,0,0.1)', color: '#ffc800', fontWeight: 700 }}>
-                {l.spam_score}
-              </span>
-            )}
-            <span style={{ flex: 1, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {l.message || '—'}
-            </span>
-            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>{l.performed_by}</span>
-          </div>
-        ))}
+            <option value="all">Все каналы</option>
+            {channels.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{
+            fontSize: '11px', color: 'rgba(255,255,255,0.35)',
+            padding: '4px 10px', borderRadius: '999px', background: 'rgba(255,255,255,0.02)',
+          }}>
+            {filtered.length} / {logs.length}
+          </span>
+          <button onClick={load} title="Обновить" style={{
+            padding: '7px 9px', borderRadius: '8px', cursor: 'pointer',
+            background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', outline: 'none',
+            display: 'flex', alignItems: 'center',
+          }}>
+            <RefreshCw size={12} style={{
+              color: 'rgba(255,255,255,0.55)',
+              animation: refreshing ? 'spin 1s linear infinite' : 'none',
+            }} />
+          </button>
+        </div>
       </div>
+
+      <div style={{
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+        borderRadius: '14px', overflow: 'hidden', maxHeight: 'calc(100vh - 240px)', overflowY: 'auto',
+      }}>
+        {/* Sticky header */}
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 5,
+          display: 'grid', gridTemplateColumns: GRID, gap: '10px', alignItems: 'center',
+          padding: '9px 16px',
+          background: 'rgba(10,10,16,0.95)',
+          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+          color: 'rgba(255,255,255,0.3)',
+        }}>
+          <div>Время</div>
+          <div>Действие</div>
+          <div>Канал</div>
+          <div>Пользователь</div>
+          <div>Модератор</div>
+          <div>Счёт</div>
+          <div>Сообщение</div>
+          <div>Причины</div>
+          <div>Длит.</div>
+        </div>
+
+        {filtered.length === 0 ? (
+          <div style={{ padding: '32px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Нет логов</div>
+        ) : filtered.slice(0, 500).map(l => {
+          const meta = ACTION_META[l.action] || { color: 'rgba(255,255,255,0.5)', bg: 'rgba(255,255,255,0.05)', icon: Activity, label: l.action };
+          const Icon = meta.icon;
+          const isAuto = l.performed_by === 'AUTO' || l.action === 'AUTO_MUTED';
+          const moderator = l.performed_by_display || l.performed_by || '—';
+          const d = new Date(l.created_at);
+          return (
+            <div key={l.id} style={{
+              display: 'grid', gridTemplateColumns: GRID, gap: '10px', alignItems: 'center',
+              padding: '7px 16px', borderBottom: '1px solid rgba(255,255,255,0.04)',
+              fontSize: '12px',
+            }}>
+              {/* Time */}
+              <div>
+                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
+                  {pad(d.getHours())}:{pad(d.getMinutes())}:{pad(d.getSeconds())}
+                </div>
+                <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.25)' }}>
+                  {pad(d.getDate())}.{pad(d.getMonth() + 1)}
+                </div>
+              </div>
+
+              {/* Action badge */}
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: '4px', justifySelf: 'start',
+                padding: '3px 8px', borderRadius: '7px',
+                background: meta.bg, color: meta.color, fontWeight: 700, fontSize: '9px',
+                textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap',
+              }}>
+                <Icon size={9} />
+                {meta.label}
+              </div>
+
+              {/* Channel */}
+              <div style={{ color: '#ffc800', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {l.channel_name}
+              </div>
+
+              {/* Target user */}
+              <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.88)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {l.username}
+              </div>
+
+              {/* Moderator */}
+              <div style={{ fontSize: '11px', overflow: 'hidden' }}>
+                {isAuto ? (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '3px',
+                    padding: '2px 7px', borderRadius: '999px',
+                    background: 'rgba(255,152,0,0.12)', color: '#ff9800',
+                    fontWeight: 700, fontSize: '9px', letterSpacing: '0.06em',
+                  }}>
+                    <Zap size={9} />АВТО
+                  </span>
+                ) : (
+                  <span style={{ color: 'rgba(255,255,255,0.55)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                    {moderator}
+                  </span>
+                )}
+              </div>
+
+              {/* Score */}
+              <div>
+                {l.spam_score > 0 ? (
+                  <span style={{
+                    display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '6px',
+                    background: l.spam_score >= 90 ? 'rgba(255,89,89,0.12)' : l.spam_score >= 70 ? 'rgba(255,200,0,0.1)' : 'rgba(255,255,255,0.04)',
+                    color: l.spam_score >= 90 ? '#ff5959' : l.spam_score >= 70 ? '#ffc800' : 'rgba(255,255,255,0.5)',
+                  }}>{l.spam_score}</span>
+                ) : <span style={{ color: 'rgba(255,255,255,0.2)' }}>—</span>}
+              </div>
+
+              {/* Message */}
+              <div title={l.message || ''} style={{
+                fontSize: '11px', color: 'rgba(255,255,255,0.4)', fontStyle: 'italic',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {l.message || '—'}
+              </div>
+
+              {/* Reasons */}
+              <div style={{ display: 'flex', gap: '3px', overflow: 'hidden', alignItems: 'center' }}>
+                {l.reasons && l.reasons.length > 0 ? (
+                  <>
+                    <span style={{
+                      fontSize: '9px', padding: '2px 6px', borderRadius: '999px',
+                      background: 'rgba(255,89,89,0.08)', color: '#ff7575',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>{l.reasons[0]}</span>
+                    {l.reasons.length > 1 && (
+                      <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>
+                        +{l.reasons.length - 1}
+                      </span>
+                    )}
+                  </>
+                ) : <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '10px' }}>—</span>}
+              </div>
+
+              {/* Duration */}
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.5)' }}>
+                {formatLogDuration(l.duration_seconds)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
