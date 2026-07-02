@@ -713,8 +713,36 @@ export class TwitchManager {
     tick();
   }
 
+  /**
+   * Helix requires the Client-Id header to match the client the token was
+   * issued for. Manually-entered tokens (e.g. chatterino) belong to a foreign
+   * client id — resolve the token's own client id via oauth2/validate so those
+   * tokens work too. Cached per token.
+   */
+  private tokenClientIdCache = new Map<string, string>();
+
+  private async clientIdForToken(token: string): Promise<string> {
+    const cached = this.tokenClientIdCache.get(token);
+    if (cached) return cached;
+    try {
+      const r = await fetch('https://id.twitch.tv/oauth2/validate', {
+        headers: { 'Authorization': `OAuth ${token}` },
+      });
+      if (r.ok) {
+        const d: any = await r.json();
+        if (d.client_id) {
+          this.tokenClientIdCache.set(token, d.client_id);
+          if (this.tokenClientIdCache.size > 200) this.tokenClientIdCache.clear();
+          return d.client_id;
+        }
+      }
+    } catch {}
+    return process.env.TWITCH_CLIENT_ID || '';
+  }
+
   private async getHelixHeaders(ownerEmail: string | null) {
-    const { clientId, oauth } = await this.getHelixCredentials(ownerEmail);
+    const { oauth } = await this.getHelixCredentials(ownerEmail);
+    const clientId = await this.clientIdForToken(oauth);
     return {
       'Client-Id': clientId,
       'Authorization': `Bearer ${oauth}`,
@@ -829,6 +857,62 @@ export class TwitchManager {
     }
   }
 
+  /** Candidate fallback actors when the requester's own token can't moderate. */
+  private actorFallbacks(channelName: string, tried: string | null): (string | null)[] {
+    const out: (string | null)[] = [];
+    const primary = this.channels.get(channelName)?.primaryEmail ?? null;
+    if (primary && primary !== tried) out.push(primary);
+    if (tried !== null) out.push(null); // global env bot
+    return out;
+  }
+
+  /**
+   * Execute a Helix ban/timeout as the given actor. Returns true on success.
+   * Handles stale moderator_id retry; token refresh happens inside
+   * getUserIds/getModeratorId. duration omitted → permanent ban.
+   */
+  private async execHelixBan(
+    channelLower: string, userLower: string, actorEmail: string | null,
+    opts: { duration?: number; reason?: string }
+  ): Promise<boolean> {
+    try {
+      const ids = await this.getUserIds([channelLower, userLower], actorEmail);
+      const broadcasterId = ids[channelLower];
+      const targetId = ids[userLower];
+      let moderatorId = await this.getModeratorId(actorEmail);
+      if (!broadcasterId || !targetId || !moderatorId) {
+        logger.warn(`execHelixBan: unresolved ids actor=${actorEmail ?? 'global'} broadcaster=${broadcasterId} target=${targetId} moderator=${moderatorId}`);
+        return false;
+      }
+      const data: any = { user_id: targetId };
+      if (opts.duration) data.duration = opts.duration;
+      if (opts.reason) data.reason = opts.reason;
+      const payload = JSON.stringify({ data });
+      const url = () => `https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${broadcasterId}&moderator_id=${moderatorId}`;
+      const headers = await this.getHelixHeaders(actorEmail);
+      let res = await fetch(url(), { method: 'POST', headers, body: payload });
+      if (res.status === 401) {
+        const txt = await res.text();
+        if (/moderator_id/i.test(txt)) {
+          this.invalidateModeratorCache(actorEmail);
+          moderatorId = await this.getModeratorId(actorEmail);
+          if (moderatorId) res = await fetch(url(), { method: 'POST', headers, body: payload });
+        } else {
+          logger.warn(`execHelixBan 401 actor=${actorEmail ?? 'global'}: ${txt}`);
+          return false;
+        }
+      }
+      if (!res.ok) {
+        logger.warn(`execHelixBan ${res.status} actor=${actorEmail ?? 'global'}: ${await res.text().catch(() => '')}`);
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      logger.error(`execHelixBan threw actor=${actorEmail ?? 'global'}: ${err?.message}`);
+      return false;
+    }
+  }
+
   async muteUser(channelName: string, username: string, durationSeconds: number, performedBy: string, skipReason = false, customReason?: string): Promise<void> {
     const channelLower = channelName.toLowerCase();
     const userLower = username.toLowerCase();
@@ -847,46 +931,17 @@ export class TwitchManager {
     }
 
     try {
-      const ids = await this.getUserIds([channelLower, userLower], actorEmail);
-      const broadcasterId = ids[channelLower];
-      const targetId = ids[userLower];
-      let moderatorId = await this.getModeratorId(actorEmail);
-
-      if (broadcasterId && targetId && moderatorId) {
-        const data: any = { user_id: targetId, duration: durationSeconds };
-        // Only include reason if non-empty
-        if (reason) data.reason = reason;
-        const payload = JSON.stringify({ data });
-        const headers = await this.getHelixHeaders(actorEmail);
-        let res = await fetch(
-          `https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${broadcasterId}&moderator_id=${moderatorId}`,
-          { method: 'POST', headers, body: payload }
-        );
-        // If 401 about moderator_id mismatch — invalidate cache and retry once
-        if (res.status === 401) {
-          const txt = await res.text();
-          if (/moderator_id/i.test(txt)) {
-            logger.warn(`Moderator ID stale for ${actorEmail}, invalidating cache and retrying...`);
-            this.invalidateModeratorCache(actorEmail);
-            moderatorId = await this.getModeratorId(actorEmail);
-            if (moderatorId) {
-              res = await fetch(
-                `https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${broadcasterId}&moderator_id=${moderatorId}`,
-                { method: 'POST', headers, body: payload }
-              );
-            }
-          } else {
-            logger.error(`Helix timeout failed 401: ${txt}`);
+      const ok = await this.execHelixBan(channelLower, userLower, actorEmail, { duration: durationSeconds, reason });
+      if (ok) {
+        logger.info(`Timed out ${username} in ${channelName} for ${durationSeconds}s`);
+      } else {
+        // Fallback: retry with channel primary, then global bot — the mute must land
+        for (const fb of this.actorFallbacks(channelName, actorEmail)) {
+          if (await this.execHelixBan(channelLower, userLower, fb, { duration: durationSeconds, reason })) {
+            logger.warn(`Mute for ${username} in ${channelName} executed via fallback actor=${fb ?? 'global'} (requested by ${performedBy})`);
+            break;
           }
         }
-        if (!res.ok) {
-          const responseText = await res.text();
-          logger.error(`Helix timeout failed ${res.status}: ${responseText}`);
-        } else {
-          logger.info(`Timed out ${username} in ${channelName} for ${durationSeconds}s`);
-        }
-      } else {
-        logger.error(`Could not resolve IDs: broadcaster=${broadcasterId} target=${targetId} moderator=${moderatorId}`);
       }
     } catch (err: any) {
       logger.error(`muteUser error: ${err?.message}`);
@@ -921,35 +976,16 @@ export class TwitchManager {
     }
 
     try {
-      const ids = await this.getUserIds([channelLower, userLower], actorEmail);
-      const broadcasterId = ids[channelLower];
-      const targetId = ids[userLower];
-      let moderatorId = await this.getModeratorId(actorEmail);
-
-      if (broadcasterId && targetId && moderatorId) {
-        const data: any = { user_id: targetId };
-        if (reason) data.reason = reason;
-        const payload = JSON.stringify({ data });
-        const headers = await this.getHelixHeaders(actorEmail);
-        let res = await fetch(
-          `https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${broadcasterId}&moderator_id=${moderatorId}`,
-          { method: 'POST', headers, body: payload }
-        );
-        if (res.status === 401) {
-          const txt = await res.text();
-          if (/moderator_id/i.test(txt)) {
-            this.invalidateModeratorCache(actorEmail);
-            moderatorId = await this.getModeratorId(actorEmail);
-            if (moderatorId) {
-              res = await fetch(
-                `https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${broadcasterId}&moderator_id=${moderatorId}`,
-                { method: 'POST', headers, body: payload }
-              );
-            }
+      const ok = await this.execHelixBan(channelLower, userLower, actorEmail, { reason });
+      if (ok) {
+        logger.info(`Banned ${username} in ${channelName}`);
+      } else {
+        for (const fb of this.actorFallbacks(channelName, actorEmail)) {
+          if (await this.execHelixBan(channelLower, userLower, fb, { reason })) {
+            logger.warn(`Ban for ${username} in ${channelName} executed via fallback actor=${fb ?? 'global'} (requested by ${performedBy})`);
+            break;
           }
         }
-        if (!res.ok) logger.error(`Helix ban failed ${res.status}: ${await res.text()}`);
-        else logger.info(`Banned ${username} in ${channelName}`);
       }
     } catch (err: any) {
       logger.error(`banUser error: ${err?.message}`);
