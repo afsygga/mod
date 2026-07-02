@@ -42,9 +42,10 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
   const isMuted = item.muted;
   const customReason = typeof window !== 'undefined' ? localStorage.getItem('mute_reason') : null;
   const reasons = isMuted ? (customReason ? [customReason] : [lang === 'ru' ? 'Замьючен' : 'Muted']) : item.reasons;
-  const accentColor = item.score >= 90 ? '#ff5959' : '#ffc800';
-  const accentBg = item.score >= 90 ? 'rgba(255,89,89,0.05)' : 'rgba(255,255,255,0.035)';
-  const accentBorder = item.score >= 90 ? 'rgba(255,89,89,0.18)' : 'rgba(255,200,0,0.14)';
+  const isCritical = item.score >= 90;
+  const accentColor = isCritical ? '#ff5959' : '#ffc800';
+  const accentBg = isCritical ? 'rgba(255,89,89,0.04)' : 'rgba(255,255,255,0.02)';
+  const accentBorder = isCritical ? 'rgba(255,89,89,0.2)' : 'rgba(255,200,0,0.14)';
   const spamCount = item.spamCount || 1;
   const quickPresets = lang === 'ru'
     ? [{ label: '10м', value: 600 }, { label: '1ч', value: 3600 }, { label: '24ч', value: 86400 }]
@@ -59,23 +60,39 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
       transition={{ type: 'spring', stiffness: 340, damping: 26 }}
       className={isMuted ? 'queue-muted' : ''}
       style={{
-        background: isMuted ? 'rgba(255,255,255,0.025)' : accentBg,
-        border: isMuted ? '1px solid rgba(255,255,255,0.08)' : `1px solid ${accentBorder}`,
+        background: isMuted ? 'rgba(0,200,120,0.02)' : accentBg,
+        border: isMuted ? '1px solid rgba(255,255,255,0.06)' : `1px solid ${accentBorder}`,
         borderRadius: '12px',
-        padding: '10px 12px 10px 15px',
+        padding: '9px 11px 9px 14px',
         position: 'relative',
         overflow: 'hidden',
+        transition: 'border-color 0.2s, box-shadow 0.2s',
+      }}
+      onMouseEnter={e => {
+        if (!isMuted) {
+          e.currentTarget.style.borderColor = `${accentColor}66`;
+          e.currentTarget.style.boxShadow = `0 0 18px ${accentColor}14`;
+        }
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.borderColor = isMuted ? 'rgba(255,255,255,0.06)' : accentBorder;
+        e.currentTarget.style.boxShadow = 'none';
       }}>
 
-      {/* Left accent bar */}
-      <div style={{
-        position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px',
-        background: isMuted ? '#00c878' : accentColor,
-        opacity: isMuted ? 0.5 : 0.85,
-      }} />
+      {/* Left accent bar — gradient fading to transparent; pulses for critical scores */}
+      <motion.div
+        animate={!isMuted && isCritical ? { opacity: [0.9, 0.4, 0.9] } : undefined}
+        transition={!isMuted && isCritical ? { repeat: Infinity, duration: 1.8, ease: 'easeInOut' } : undefined}
+        style={{
+          position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px',
+          background: isMuted
+            ? 'linear-gradient(180deg, #00c878, rgba(0,200,120,0))'
+            : `linear-gradient(180deg, ${accentColor}, ${accentColor}00)`,
+          opacity: isMuted ? 0.5 : 0.85,
+        }} />
 
       {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '7px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
         {!isMuted && (
           <button
             onClick={onToggleSelected}
@@ -96,10 +113,13 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
             {isSelected && <Check size={9} style={{ color: '#000' }} />}
           </button>
         )}
-        <div onClick={onUserClick} style={{ cursor: 'pointer', flexShrink: 0 }}
+        <div onClick={onUserClick} style={{
+          cursor: 'pointer', flexShrink: 0, borderRadius: '50%',
+          boxShadow: `0 0 0 1px ${isMuted ? '#00c878' : accentColor}50`,
+        }}
           onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
           onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
-          <Avatar username={item.username} color={item.color} size={24} fontSize={9} />
+          <Avatar username={item.username} color={item.color} size={26} fontSize={9} />
         </div>
 
         <div onClick={onUserClick} style={{
@@ -150,9 +170,10 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
             <span title={lang === 'ru' ? `Спам-скор: ${item.score}` : `Spam score: ${item.score}`} style={{
               display: 'inline-flex', alignItems: 'center', gap: '3px',
               fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '8px',
-              background: 'rgba(255,255,255,0.04)',
+              background: `${accentColor}14`,
               color: accentColor,
               border: `1px solid ${accentBorder}`,
+              boxShadow: `0 0 10px ${accentColor}40`,
             }}>
               <AlertTriangle size={9} />
               {item.score}
@@ -187,12 +208,12 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
         fontSize: '11.5px', fontStyle: 'italic', lineHeight: 1.4,
         color: 'rgba(255,255,255,0.5)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        marginBottom: '6px',
+        marginBottom: '5px',
       }}>"{item.lastMsg}"</div>
 
       <div style={{
         display: 'flex', gap: '4px', alignItems: 'center', overflow: 'hidden',
-        marginBottom: isMuted ? 0 : '8px',
+        marginBottom: isMuted ? 0 : '7px',
       }} title={reasons.join(' · ')}>
         {reasons.slice(0, 2).map((r, i) => (
           <span key={i} style={{

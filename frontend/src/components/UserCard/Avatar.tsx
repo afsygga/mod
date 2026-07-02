@@ -14,14 +14,12 @@ async function fetchAvatar(username: string): Promise<string | null> {
     try {
       const base = import.meta.env.VITE_API_URL || '';
       const token = localStorage.getItem('auth_token');
-      const r = await fetch(`${base}/api/moderation/user/${encodeURIComponent(key)}`, {
+      const r = await fetch(`${base}/api/moderation/avatar/${encodeURIComponent(key)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!r.ok) throw new Error('failed');
       const data = await r.json();
-      // Endpoint shape evolved: previously { profile_image_url, ... },
-      // now { twitch: { profile_image_url, ... }, profile, timeline, ... }
-      const url = data?.twitch?.profile_image_url || data?.profile_image_url || null;
+      const url = data?.avatar || null;
       cache.set(key, url);
       return url;
     } catch {

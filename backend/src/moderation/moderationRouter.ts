@@ -60,6 +60,63 @@ moderationRouter.post('/unban', async (req: Request, res: Response) => {
 const avatarCache: Map<string, { data: any; ts: number }> = new Map();
 const AVATAR_TTL = 30 * 60 * 1000; // 30 min
 
+// Lightweight avatar lookup for list views (queue cards). Never throws — returns { avatar: null } on any failure.
+moderationRouter.get('/avatar/:username', async (req: Request, res: Response) => {
+  const username = String(req.params.username || '').toLowerCase();
+  try {
+    // 1. In-memory cache (shared with /user/:username)
+    const cached = avatarCache.get(username);
+    if (cached && Date.now() - cached.ts < AVATAR_TTL && cached.data?.profile_image_url) {
+      return res.json({ avatar: cached.data.profile_image_url });
+    }
+
+    // 2. DB cache
+    const { rows } = await db.query(
+      'SELECT profile_image_url FROM twitch_user_meta WHERE username = LOWER($1) LIMIT 1',
+      [username]
+    );
+    if (rows[0]?.profile_image_url) {
+      return res.json({ avatar: rows[0].profile_image_url });
+    }
+
+    // 3. Helix fallback — try bot token first, then any available user tokens
+    const tokenRows = await db.query(
+      'SELECT twitch_oauth FROM users WHERE twitch_oauth IS NOT NULL LIMIT 3'
+    ).catch(() => ({ rows: [] as any[] }));
+    const tokens: string[] = [
+      process.env.TWITCH_BOT_OAUTH || '',
+      ...tokenRows.rows.map((r: any) => String(r.twitch_oauth || '')),
+    ].filter(Boolean);
+
+    for (const t of tokens) {
+      try {
+        const r = await fetch(`https://api.twitch.tv/helix/users?login=${encodeURIComponent(username)}`, {
+          headers: {
+            'Client-Id': process.env.TWITCH_CLIENT_ID || '',
+            'Authorization': `Bearer ${t.replace(/^oauth:/, '')}`,
+          },
+        });
+        if (!r.ok) continue;
+        const data = await r.json() as any;
+        const user = (data.data || [])[0];
+        if (!user) return res.json({ avatar: null }); // valid response, user doesn't exist
+        await db.query(
+          `INSERT INTO twitch_user_meta (username, twitch_id, display_name, profile_image_url, account_created_at, description, fetched_at)
+           VALUES ($1,$2,$3,$4,$5,$6,NOW())
+           ON CONFLICT (username) DO UPDATE SET
+             twitch_id=$2, display_name=$3, profile_image_url=$4, account_created_at=$5, description=$6, fetched_at=NOW()`,
+          [username, user.id, user.display_name, user.profile_image_url, user.created_at, user.description]
+        ).catch(() => {});
+        return res.json({ avatar: user.profile_image_url || null });
+      } catch { /* try next token */ }
+    }
+    res.json({ avatar: null });
+  } catch (err) {
+    logger.error('GET /moderation/avatar error', err);
+    res.json({ avatar: null });
+  }
+});
+
 // Get Twitch user info + spam profile + activity timeline
 moderationRouter.get('/user/:username', async (req: Request, res: Response) => {
   const username = req.params.username.toLowerCase();
