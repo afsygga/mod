@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, X, Check, AlertTriangle } from 'lucide-react';
+import { Shield, X, Check } from 'lucide-react';
 import { QueueItem } from '../../types';
 import { getInitials } from '../../utils/colors';
 import { Avatar } from '../UserCard/Avatar';
@@ -42,252 +42,200 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
   const isMuted = item.muted;
   const customReason = typeof window !== 'undefined' ? localStorage.getItem('mute_reason') : null;
   const reasons = isMuted ? (customReason ? [customReason] : [lang === 'ru' ? 'Замьючен' : 'Muted']) : item.reasons;
-  const isCritical = item.score >= 90;
-  const accentColor = isCritical ? '#ff5959' : '#ffc800';
-  const accentBg = isCritical ? 'rgba(255,89,89,0.04)' : 'rgba(255,255,255,0.02)';
-  const accentBorder = isCritical ? 'rgba(255,89,89,0.2)' : 'rgba(255,200,0,0.14)';
+  const scoreColor = item.score >= 90 ? '#ff5959' : item.score >= 70 ? '#ffc800' : 'rgba(255,255,255,0.5)';
+  const leftBorder = isMuted ? '#00c878' : item.score >= 90 ? '#ff5959' : item.score >= 70 ? '#ffc800' : 'transparent';
   const spamCount = item.spamCount || 1;
   const quickPresets = lang === 'ru'
     ? [{ label: '10м', value: 600 }, { label: '1ч', value: 3600 }, { label: '24ч', value: 86400 }]
     : [{ label: '10m', value: 600 }, { label: '1h', value: 3600 }, { label: '24h', value: 86400 }];
 
+  const flatBtn = (bg: string, color: string, border: string): React.CSSProperties => ({
+    padding: '4px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 600,
+    background: bg, color, border: `1px solid ${border}`, cursor: 'pointer',
+    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+  });
+
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, x: 14, scale: 0.97 }}
-      animate={{ opacity: 1, x: 0, scale: 1 }}
-      exit={{ opacity: 0, x: 18, scale: 0.95, transition: { duration: 0.18 } }}
-      transition={{ type: 'spring', stiffness: 340, damping: 26 }}
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, transition: { duration: 0.15 } }}
       className={isMuted ? 'queue-muted' : ''}
       style={{
-        background: isMuted ? 'rgba(0,200,120,0.02)' : accentBg,
-        border: isMuted ? '1px solid rgba(255,255,255,0.06)' : `1px solid ${accentBorder}`,
-        borderRadius: '12px',
-        padding: '9px 11px 9px 14px',
-        position: 'relative',
-        overflow: 'hidden',
-        transition: 'border-color 0.2s, box-shadow 0.2s',
+        background: 'rgba(255,255,255,0.025)',
+        border: '1px solid rgba(255,255,255,0.05)',
+        borderLeft: `2px solid ${leftBorder}`,
+        borderRadius: '10px',
+        padding: '8px 12px',
+        marginBottom: '6px',
+        transition: 'background 0.15s',
       }}
       onMouseEnter={e => {
-        if (!isMuted) {
-          e.currentTarget.style.borderColor = `${accentColor}66`;
-          e.currentTarget.style.boxShadow = `0 0 18px ${accentColor}14`;
-        }
+        e.currentTarget.style.background = 'rgba(255,255,255,0.045)';
+        const cb = e.currentTarget.querySelector('[data-qsel]') as HTMLElement | null;
+        if (cb) cb.style.opacity = '1';
       }}
       onMouseLeave={e => {
-        e.currentTarget.style.borderColor = isMuted ? 'rgba(255,255,255,0.06)' : accentBorder;
-        e.currentTarget.style.boxShadow = 'none';
+        e.currentTarget.style.background = 'rgba(255,255,255,0.025)';
+        const cb = e.currentTarget.querySelector('[data-qsel]') as HTMLElement | null;
+        if (cb && !isSelected) cb.style.opacity = '0.35';
       }}>
 
-      {/* Left accent bar — gradient fading to transparent; pulses for critical scores */}
-      <motion.div
-        animate={!isMuted && isCritical ? { opacity: [0.9, 0.4, 0.9] } : undefined}
-        transition={!isMuted && isCritical ? { repeat: Infinity, duration: 1.8, ease: 'easeInOut' } : undefined}
-        style={{
-          position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px',
-          background: isMuted
-            ? 'linear-gradient(180deg, #00c878, rgba(0,200,120,0))'
-            : `linear-gradient(180deg, ${accentColor}, ${accentColor}00)`,
-          opacity: isMuted ? 0.5 : 0.85,
-        }} />
-
-      {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+      {/* Line 1 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         {!isMuted && (
           <button
+            data-qsel
             onClick={onToggleSelected}
             title={isSelected
               ? (lang === 'ru' ? 'Снять выбор' : 'Deselect')
               : (lang === 'ru' ? 'Выбрать' : 'Select')}
             style={{
-              width: '14px', height: '14px', borderRadius: '4px', cursor: 'pointer', flexShrink: 0,
+              width: '12px', height: '12px', borderRadius: '3px', cursor: 'pointer', flexShrink: 0,
               background: isSelected ? '#ffc800' : 'rgba(255,255,255,0.05)',
               border: isSelected ? '1px solid #ffc800' : '1px solid rgba(255,255,255,0.15)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               padding: 0, outline: 'none',
-              opacity: isSelected ? 1 : 0.6,
+              opacity: isSelected ? 1 : 0.35,
               transition: 'background 0.15s, border-color 0.15s, opacity 0.15s',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-            onMouseLeave={e => { if (!isSelected) e.currentTarget.style.opacity = '0.6'; }}>
-            {isSelected && <Check size={9} style={{ color: '#000' }} />}
+            }}>
+            {isSelected && <Check size={8} style={{ color: '#000' }} />}
           </button>
         )}
+
         <div onClick={onUserClick} style={{
           cursor: 'pointer', flexShrink: 0, borderRadius: '50%',
-          boxShadow: `0 0 0 1px ${isMuted ? '#00c878' : accentColor}50`,
-        }}
-          onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
-          onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
-          <Avatar username={item.username} color={item.color} size={26} fontSize={9} />
+          boxShadow: '0 0 0 1px rgba(255,255,255,0.1)',
+          display: 'flex',
+        }}>
+          <Avatar username={item.username} color={item.color} size={22} fontSize={8} />
         </div>
 
-        <div onClick={onUserClick} style={{
-          flex: 1, minWidth: 0, cursor: 'pointer',
-          display: 'flex', alignItems: 'center', gap: '6px',
+        <span className="username" onClick={onUserClick} style={{
+          fontWeight: 600, fontSize: '13px', color: item.color, cursor: 'pointer',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
+        onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}>
+          {item.username}
+        </span>
+
+        <span title={item.channel} style={{
+          fontSize: '11px', color: 'rgba(255,255,255,0.35)', flexShrink: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100px',
         }}>
-          <span className="username" style={{
-            fontWeight: 600, fontSize: '12.5px',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            color: item.color,
-          }}
-          onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
-          onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}>
-            {item.username}
+          · {item.channel}
+        </span>
+
+        {!isMuted && spamCount > 1 && (
+          <span
+            title={lang === 'ru' ? `${spamCount} спам-сообщений подряд` : `${spamCount} spam messages in a row`}
+            style={{ fontSize: '11px', fontWeight: 700, color: '#ff9800', flexShrink: 0 }}>
+            ×{spamCount}
           </span>
-          <span title={item.channel} style={{
-            fontSize: '9.5px', fontWeight: 600, padding: '1px 6px', borderRadius: '999px',
-            background: 'rgba(255,200,0,0.08)', color: '#ffc800',
-            border: '1px solid rgba(255,200,0,0.16)',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            maxWidth: '90px', flexShrink: 0,
-          }}>
-            {item.channel}
-          </span>
-        </div>
+        )}
+
+        <span style={{ flex: 1 }} />
 
         {!isMuted && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+          <>
+            <span title={lang === 'ru' ? `Спам-скор: ${item.score}` : `Spam score: ${item.score}`} style={{
+              fontSize: '12px', fontWeight: 700, color: scoreColor, flexShrink: 0,
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              {item.score}
+            </span>
             <span title={lang === 'ru' ? 'Время с момента обнаружения' : 'Time since detection'} style={{
-              fontSize: '10px', color: 'rgba(255,255,255,0.3)', fontVariantNumeric: 'tabular-nums',
+              fontSize: '10px', color: 'rgba(255,255,255,0.3)', fontVariantNumeric: 'tabular-nums', flexShrink: 0,
             }}>
               {formatAge(item.ts, lang)}
-            </span>
-            {spamCount > 1 && (
-              <motion.span
-                animate={{ scale: [1, 1.12, 1] }}
-                transition={{ repeat: Infinity, duration: 1.6, ease: 'easeInOut' }}
-                title={lang === 'ru' ? `${spamCount} спам-сообщений подряд` : `${spamCount} spam messages in a row`}
-                style={{
-                  fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '7px',
-                  background: spamCount >= 4 ? 'rgba(255,89,89,0.12)' : 'rgba(255,200,0,0.12)',
-                  color: spamCount >= 4 ? '#ff7070' : '#ffc800',
-                  border: `1px solid ${spamCount >= 4 ? 'rgba(255,89,89,0.28)' : 'rgba(255,200,0,0.28)'}`,
-                }}>
-                ×{spamCount}
-              </motion.span>
-            )}
-            <span title={lang === 'ru' ? `Спам-скор: ${item.score}` : `Spam score: ${item.score}`} style={{
-              display: 'inline-flex', alignItems: 'center', gap: '3px',
-              fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '8px',
-              background: `${accentColor}14`,
-              color: accentColor,
-              border: `1px solid ${accentBorder}`,
-              boxShadow: `0 0 10px ${accentColor}40`,
-            }}>
-              <AlertTriangle size={9} />
-              {item.score}
             </span>
             <button onClick={onRemove}
               title={lang === 'ru' ? 'Скрыть' : 'Dismiss'}
               style={{
-                padding: '4px', borderRadius: '7px', background: 'transparent', border: 'none', cursor: 'pointer',
-                display: 'flex', alignItems: 'center',
+                padding: '2px', background: 'transparent', border: 'none', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', opacity: 0.4, transition: 'opacity 0.15s', flexShrink: 0,
               }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <X size={11} style={{ color: 'rgba(255,255,255,0.4)' }} />
+              onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+              onMouseLeave={e => (e.currentTarget.style.opacity = '0.4')}>
+              <X size={14} style={{ color: 'rgba(255,255,255,0.6)' }} />
             </button>
-          </div>
-        )}
-
-        {isMuted && (
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0,
-            fontSize: '9.5px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px',
-            background: 'rgba(0,200,120,0.12)', color: '#00c878',
-            border: '1px solid rgba(0,200,120,0.25)',
-          }}>
-            <Check size={9} /> MUTED
-          </span>
+          </>
         )}
       </div>
 
-      {/* Message preview + reason tags on one info block */}
-      <div className="lastmsg" title={item.lastMsg} style={{
-        fontSize: '11.5px', fontStyle: 'italic', lineHeight: 1.4,
-        color: 'rgba(255,255,255,0.5)',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        marginBottom: '5px',
-      }}>"{item.lastMsg}"</div>
+      {/* Line 2 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '5px' }}>
+        <div className="lastmsg" title={item.lastMsg} style={{
+          flex: 1, minWidth: 0,
+          fontSize: '12px', fontStyle: 'italic', color: 'rgba(255,255,255,0.55)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>"{item.lastMsg}"</div>
 
-      <div style={{
-        display: 'flex', gap: '4px', alignItems: 'center', overflow: 'hidden',
-        marginBottom: isMuted ? 0 : '7px',
-      }} title={reasons.join(' · ')}>
-        {reasons.slice(0, 2).map((r, i) => (
-          <span key={i} style={{
-            fontSize: '9.5px', padding: '1px 7px', borderRadius: '999px', fontWeight: 500,
-            background: isMuted ? 'rgba(0,200,120,0.08)' : 'rgba(255,89,89,0.08)',
-            color: isMuted ? '#00c878' : '#ff7575',
-            border: isMuted ? '1px solid rgba(0,200,120,0.18)' : '1px solid rgba(255,89,89,0.16)',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            maxWidth: '140px',
-          }}>{r}</span>
-        ))}
-        {reasons.length > 2 && (
-          <span style={{
-            fontSize: '9.5px', padding: '1px 6px', borderRadius: '999px', fontWeight: 600,
-            background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.45)',
-            border: '1px solid rgba(255,255,255,0.08)', flexShrink: 0,
-          }}>+{reasons.length - 2}</span>
+        {reasons.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }} title={reasons.join(' · ')}>
+            <span style={{
+              fontSize: '10px', padding: '1px 6px', borderRadius: '5px',
+              background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px',
+            }}>{reasons[0]}</span>
+            {reasons.length > 1 && (
+              <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>+{reasons.length - 1}</span>
+            )}
+          </div>
         )}
       </div>
 
-      {!isMuted && (
-        <div style={{ display: 'flex', gap: '5px', alignItems: 'stretch' }}>
-          {/* Quick mute presets */}
-          <div style={{
-            display: 'flex', borderRadius: '8px', overflow: 'hidden',
-            border: '1px solid rgba(255,255,255,0.1)',
-          }}>
-            {quickPresets.map((p, i) => (
-              <button key={p.value}
-                onClick={() => onMute(p.value)}
-                title={lang === 'ru' ? `Мут на ${p.label}` : `Mute for ${p.label}`}
-                style={{
-                  padding: '4px 8px', fontSize: '10.5px', fontWeight: 700,
-                  background: 'rgba(255,255,255,0.045)', color: 'rgba(255,255,255,0.8)',
-                  border: 'none', cursor: 'pointer',
-                  borderLeft: i > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,200,0,0.18)'; e.currentTarget.style.color = '#ffc800'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.045)'; e.currentTarget.style.color = 'rgba(255,255,255,0.8)'; }}>
-                {p.label}
-              </button>
-            ))}
-          </div>
+      {/* Line 3 — actions or muted marker */}
+      {isMuted ? (
+        <div style={{ marginTop: '7px', fontSize: '10px', fontWeight: 700, color: '#00c878', letterSpacing: '0.05em' }}>
+          {lang === 'ru' ? 'ЗАМЬЮЧЕН' : 'MUTED'}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '7px' }}>
+          {quickPresets.map(p => (
+            <button key={p.value}
+              onClick={() => onMute(p.value)}
+              title={lang === 'ru' ? `Мут на ${p.label}` : `Mute for ${p.label}`}
+              style={flatBtn('rgba(255,255,255,0.04)', 'rgba(255,255,255,0.65)', 'rgba(255,255,255,0.07)')}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'rgba(160,112,255,0.12)';
+                e.currentTarget.style.color = '#c49dff';
+                e.currentTarget.style.borderColor = 'rgba(160,112,255,0.3)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                e.currentTarget.style.color = 'rgba(255,255,255,0.65)';
+                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.07)';
+              }}>
+              {p.label}
+            </button>
+          ))}
 
-          {/* Custom duration select */}
           <select value={duration} onChange={e => onDurationChange(parseInt(e.target.value))}
             title={lang === 'ru' ? 'Другая длительность' : 'Other duration'}
             style={{
-              fontSize: '10.5px', padding: '4px 4px', borderRadius: '8px',
-              background: 'rgba(255,255,255,0.045)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              color: 'rgba(255,255,255,0.75)', cursor: 'pointer',
+              fontSize: '11px', fontWeight: 600, padding: '4px 4px', borderRadius: '7px',
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.07)',
+              color: 'rgba(255,255,255,0.65)', cursor: 'pointer',
               maxWidth: '68px',
             }}>
             {durations.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
           </select>
 
-          <button onClick={() => onMute()} style={{
-            flex: 1, padding: '4px 0', borderRadius: '8px',
-            fontSize: '10.5px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
-            background: 'rgba(255,255,255,0.06)', color: '#ffffff',
-            border: '1px solid rgba(255,255,255,0.13)', cursor: 'pointer',
-          }} onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.14)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}>
+          <button onClick={() => onMute()}
+            style={{ ...flatBtn('rgba(160,112,255,0.1)', '#b48aff', 'rgba(160,112,255,0.2)'), flex: 1 }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(160,112,255,0.2)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(160,112,255,0.1)')}>
             {T[lang].mute}
           </button>
 
-          <button onClick={onBan} style={{
-            flex: 1, padding: '4px 0', borderRadius: '8px',
-            fontSize: '10.5px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
-            background: 'rgba(255,89,89,0.1)', color: '#ff7070',
-            border: '1px solid rgba(255,89,89,0.24)', cursor: 'pointer',
-          }} onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,89,89,0.2)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,89,89,0.1)')}>
+          <button onClick={onBan}
+            style={{ ...flatBtn('rgba(255,89,89,0.08)', '#ff7a7a', 'rgba(255,89,89,0.18)'), flex: 1 }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,89,89,0.16)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,89,89,0.08)')}>
             {T[lang].ban}
           </button>
         </div>
@@ -458,7 +406,7 @@ export function ModerationQueue({ items, onRemove, onMuted, onClearAll, onUserCl
                 <div key={item.id} style={{
                   outline: isSelected ? '2px solid rgba(255,200,0,0.5)' : 'none',
                   outlineOffset: '-2px',
-                  borderRadius: '12px',
+                  borderRadius: '10px',
                 }}>
                   <QueueCard
                     item={item}
