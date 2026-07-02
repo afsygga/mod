@@ -42,6 +42,14 @@ interface MinuteData {
   spam_users: number;
 }
 
+interface MinuteDetail {
+  minute: string;
+  totals: { total: number; spam: number; chatters: number };
+  top_phrases: { message: string; c: number; max_score: number }[];
+  top_spammers: { username: string; c: number; max_score: number }[];
+  mod_actions: { action: string; target: string; created_at: string; moderator: string }[];
+}
+
 interface ModProfile {
   action_breakdown: { action: string; c: number }[];
   daily_activity: { day: string; c: number; mutes: number; auto_mutes: number; bans: number; unbans: number; deletes: number }[];
@@ -67,6 +75,11 @@ function mskDate(iso: string) {
 function mskTime(iso: string) {
   return new Date(iso).toLocaleTimeString('ru-RU', {
     timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit',
+  });
+}
+function mskTimeSec(iso: string) {
+  return new Date(iso).toLocaleTimeString('ru-RU', {
+    timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
 }
 function dur(sec: number) {
@@ -617,6 +630,9 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   const [tooltip, setTooltip] = useState<{ svgX: number; idx: number } | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
+  const [detail, setDetail] = useState<MinuteDetail | null>(null);
+  const [detailMinute, setDetailMinute] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const panStartRef = useRef<{ clientX: number; viewStart: number; viewEnd: number } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -748,6 +764,26 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   };
   const onPanEnd = () => setPanning(false);
 
+  // Minute drill-down
+  const openMinute = useCallback((minute: string) => {
+    setDetailMinute(minute);
+    setDetailLoading(true);
+    api.get<MinuteDetail>(`/api/streams/${streamId}/minute-detail?minute=${encodeURIComponent(minute)}`)
+      .then(setDetail)
+      .catch(() => setDetail(null))
+      .finally(() => setDetailLoading(false));
+  }, [streamId]);
+
+  const onChartMouseUp = (e: React.MouseEvent) => {
+    const start = panStartRef.current;
+    setPanning(false);
+    // Treat as click (not drag) when the mouse barely moved
+    if (start && Math.abs(e.clientX - start.clientX) < 5 && tooltip) {
+      const d = viewData[tooltip.idx];
+      if (d) openMinute(d.minute);
+    }
+  };
+
   // Tooltip hover
   const onSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
@@ -807,8 +843,13 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
       <div ref={containerRef} style={{ padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', userSelect: 'none' }}>
         {/* Header row */}
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', flex: 1 }}>
-            Активность по минутам
+          <div style={{ flex: 1, display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+              Активность по минутам
+            </span>
+            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', textTransform: 'none', letterSpacing: 0 }}>
+              клик по графику — детали минуты
+            </span>
           </div>
           {/* LIVE badge */}
           {isLive && (
@@ -834,7 +875,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
         <div style={{ position: 'relative', cursor: panning ? 'grabbing' : 'crosshair' }}
           onMouseDown={onPanStart}
           onMouseMove={onPanMove}
-          onMouseUp={onPanEnd}
+          onMouseUp={onChartMouseUp}
           onMouseLeave={() => { setTooltip(null); onPanEnd(); }}>
           <svg
             ref={svgRef}
@@ -962,6 +1003,111 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
           Колёсико мыши — масштаб · Перетащите — прокрутка
         </div>
       </div>
+
+      {/* Minute detail panel */}
+      {detailMinute && (
+        <div style={{ marginTop: '10px', padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+            <div style={{ flex: 1, fontSize: '12px', fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>
+              Минута {mskTime(detailMinute)}
+            </div>
+            <button onClick={() => { setDetailMinute(null); setDetail(null); }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', padding: '2px', display: 'flex' }}
+              onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.7)')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.3)')}>
+              <X size={15} />
+            </button>
+          </div>
+
+          {detailLoading ? (
+            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)', padding: '8px 0' }}>Загрузка...</div>
+          ) : !detail ? (
+            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)', padding: '8px 0' }}>Не удалось загрузить данные</div>
+          ) : (
+            <>
+              {/* Totals */}
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                {[
+                  { label: 'Сообщений', value: detail.totals.total, color: '#a070ff' },
+                  { label: 'Спам', value: detail.totals.spam, color: '#ff5959' },
+                  { label: 'Уникальных', value: detail.totals.chatters, color: '#00e5cc' },
+                ].map(({ label, value, color }) => (
+                  <span key={label} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '5px 11px',
+                    borderRadius: '8px', background: `${color}0d`, border: `1px solid ${color}22`,
+                    fontSize: '11px', color: 'rgba(255,255,255,0.5)',
+                  }}>
+                    {label} <span style={{ fontWeight: 800, color }}>{value}</span>
+                  </span>
+                ))}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                <div>
+                  {/* Top spam phrases */}
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>Топ фраз спама</div>
+                  {detail.top_phrases.length === 0 ? (
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>Нет спама в эту минуту</div>
+                  ) : detail.top_phrases.map((p, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <span style={{ flex: 1, fontSize: '11px', fontStyle: 'italic', color: 'rgba(255,255,255,0.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                        {p.message}
+                      </span>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: '#a070ff', flexShrink: 0 }}>×{p.c}</span>
+                      <span style={{
+                        fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', flexShrink: 0,
+                        background: p.max_score >= 90 ? 'rgba(255,89,89,0.14)' : 'rgba(255,200,0,0.12)',
+                        color: p.max_score >= 90 ? '#ff5959' : '#ffc800',
+                        border: `1px solid ${p.max_score >= 90 ? 'rgba(255,89,89,0.28)' : 'rgba(255,200,0,0.25)'}`,
+                      }}>{p.max_score}</span>
+                    </div>
+                  ))}
+
+                  {/* Spammers */}
+                  {detail.top_spammers.length > 0 && (
+                    <>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '12px 0 8px' }}>Спамеры</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {detail.top_spammers.map(s => (
+                          <span key={s.username} style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 9px',
+                            borderRadius: '20px', background: 'rgba(255,89,89,0.08)', border: '1px solid rgba(255,89,89,0.2)',
+                            fontSize: '10px', color: 'rgba(255,255,255,0.7)', fontWeight: 600,
+                          }}>
+                            {s.username}
+                            <span style={{ color: '#ff5959', fontWeight: 700 }}>×{s.c}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Mod actions */}
+                <div>
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>Реакция модераторов</div>
+                  {detail.mod_actions.length === 0 ? (
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>Модераторы не реагировали</div>
+                  ) : detail.mod_actions.map((a, i) => {
+                    const color = ACTION_COLOR[a.action] || '#888';
+                    return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '7px', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: `${color}18`, color, border: `1px solid ${color}28`, flexShrink: 0 }}>
+                          {ACTION_LABEL[a.action] || a.action}
+                        </span>
+                        <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', fontWeight: 600, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', whiteSpace: 'nowrap' }}>{a.moderator}</span>
+                        <span style={{ flex: 1, fontSize: '11px', color: 'rgba(255,255,255,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{a.target}</span>
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', flexShrink: 0 }}>{mskTimeSec(a.created_at)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* LIVE pulse animation */}
       <style>{`@keyframes livePulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.4)} }`}</style>
@@ -1347,6 +1493,260 @@ function ModActivityChart({ channel }: { channel: string }) {
   );
 }
 
+// ─── stream comparison ────────────────────────────────────────────────────────
+const CMP_A = '#a070ff';
+const CMP_B = '#00e5cc';
+
+function fmtElapsed(min: number) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${h}:${String(m).padStart(2, '0')}`;
+}
+
+function StreamCompare({ a, b, onBack }: { a: StreamSession; b: StreamSession; onBack: () => void }) {
+  const [dataA, setDataA] = useState<MinuteData[] | null>(null);
+  const [dataB, setDataB] = useState<MinuteData[] | null>(null);
+  const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    api.get<MinuteData[]>(`/api/streams/${a.id}/messages-by-minute`).then(setDataA).catch(() => setDataA([]));
+    api.get<MinuteData[]>(`/api/streams/${b.id}/messages-by-minute`).then(setDataB).catch(() => setDataB([]));
+  }, [a.id, b.id]);
+
+  const loading = dataA === null || dataB === null;
+
+  // Normalize to "minutes from stream start" (offset axis)
+  const { sA, sB, n } = React.useMemo(() => {
+    const norm = (data: MinuteData[], startedAt: string) => {
+      const out: { msgs: number; spam: number }[] = [];
+      if (!data || data.length === 0) return out;
+      const start = Math.min(new Date(startedAt).getTime(), new Date(data[0].minute).getTime());
+      for (const d of data) {
+        const i = Math.max(0, Math.round((new Date(d.minute).getTime() - start) / 60000));
+        if (i > 24 * 60) continue;
+        while (out.length <= i) out.push({ msgs: 0, spam: 0 });
+        out[i] = { msgs: d.msgs, spam: d.spam };
+      }
+      return out;
+    };
+    const sA = loading ? [] : norm(dataA!, a.started_at);
+    const sB = loading ? [] : norm(dataB!, b.started_at);
+    return { sA, sB, n: Math.max(sA.length, sB.length) };
+  }, [dataA, dataB, loading, a.started_at, b.started_at]);
+
+  const W = 800, H = 240, PAD_L = 38, PAD_R = 8, PAD_T = 8, PAD_B = 22;
+  const CW = W - PAD_L - PAD_R, CH = H - PAD_T - PAD_B;
+  const maxY = Math.max(1, ...sA.map(d => d.msgs), ...sB.map(d => d.msgs));
+
+  const toX = (i: number) => n > 1 ? (i / (n - 1)) * CW : 0;
+  const toY = (v: number) => CH - (v / maxY) * CH;
+  const linePath = (arr: { msgs: number; spam: number }[], key: 'msgs' | 'spam') => {
+    if (arr.length < 2) return '';
+    let d = `M ${toX(0)} ${toY(arr[0][key])}`;
+    for (let i = 1; i < arr.length; i++) {
+      const cpx = (toX(i - 1) + toX(i)) / 2;
+      d += ` C ${cpx} ${toY(arr[i - 1][key])}, ${cpx} ${toY(arr[i][key])}, ${toX(i)} ${toY(arr[i][key])}`;
+    }
+    return d;
+  };
+
+  // X labels — elapsed time, ~6 evenly spaced
+  const xLabels: { i: number; text: string }[] = [];
+  if (n > 1) {
+    const count = Math.min(6, n);
+    for (let k = 0; k < count; k++) {
+      const i = Math.round((k / (count - 1)) * (n - 1));
+      xLabels.push({ i, text: fmtElapsed(i) });
+    }
+  }
+
+  const onMove = (e: React.MouseEvent) => {
+    const svg = svgRef.current, wrap = wrapRef.current;
+    if (!svg || !wrap || n < 2) return;
+    const rect = svg.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left - (PAD_L / W) * rect.width) / ((CW / W) * rect.width)));
+    const idx = Math.round(frac * (n - 1));
+    const wRect = wrap.getBoundingClientRect();
+    setHover({ idx, x: e.clientX - wRect.left, y: e.clientY - wRect.top });
+  };
+
+  // Stats
+  const stat = (arr: { msgs: number; spam: number }[], s: StreamSession) => {
+    const total = arr.reduce((sum, d) => sum + d.msgs, 0);
+    const spam = arr.reduce((sum, d) => sum + d.spam, 0);
+    const active = arr.filter(d => d.msgs > 0).length;
+    return {
+      duration: s.duration_seconds,
+      total,
+      peak: arr.length ? Math.max(...arr.map(d => d.msgs)) : 0,
+      avg: active > 0 ? total / active : 0,
+      spamPct: total > 0 ? (spam / total) * 100 : 0,
+      viewers: s.peak_viewers || 0,
+    };
+  };
+  const stA = stat(sA, a), stB = stat(sB, b);
+
+  const rows: { label: string; va: number; vb: number; fmt: (v: number) => string; lowerWins?: boolean }[] = [
+    { label: 'Длительность', va: stA.duration, vb: stB.duration, fmt: v => dur(v) },
+    { label: 'Всего сообщений', va: stA.total, vb: stB.total, fmt: v => v.toLocaleString() },
+    { label: 'Пик сообщ/мин', va: stA.peak, vb: stB.peak, fmt: v => String(v) },
+    { label: 'Средн. сообщ/мин', va: stA.avg, vb: stB.avg, fmt: v => v.toFixed(1) },
+    { label: 'Спам %', va: stA.spamPct, vb: stB.spamPct, fmt: v => `${v.toFixed(1)}%`, lowerWins: true },
+    { label: 'Пик зрителей', va: stA.viewers, vb: stB.viewers, fmt: v => v.toLocaleString() },
+  ];
+
+  const headerChip = (s: StreamSession, color: string) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+      <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: color, flexShrink: 0 }} />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: '12px', fontWeight: 700, color: 'rgba(255,255,255,0.85)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {s.title || s.channel_name}
+        </div>
+        <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>{msk(s.started_at)} МСК</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+      <button onClick={onBack} style={{
+        display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '20px',
+        background: 'none', border: 'none', cursor: 'pointer',
+        color: 'rgba(255,255,255,0.35)', fontSize: '12px', fontWeight: 500,
+      }}
+      onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.7)')}
+      onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.35)')}>
+        <ChevronLeft size={14} /> Назад
+      </button>
+
+      {/* Header: two streams */}
+      <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', padding: '16px 18px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        {headerChip(a, CMP_A)}
+        <div style={{ fontSize: '11px', fontWeight: 800, color: 'rgba(255,255,255,0.25)', alignSelf: 'center', flexShrink: 0 }}>VS</div>
+        {headerChip(b, CMP_B)}
+      </div>
+
+      {/* Chart */}
+      <div style={{ padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', marginBottom: '16px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '12px' }}>
+          Сообщений в минуту · от начала стрима
+        </div>
+        {loading ? (
+          <div style={{ height: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.25)' }}>Загрузка...</div>
+        ) : n < 2 ? (
+          <div style={{ padding: '30px 0', textAlign: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.25)' }}>Недостаточно данных для сравнения</div>
+        ) : (
+          <div ref={wrapRef} style={{ position: 'relative' }}>
+            <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', display: 'block' }}
+              onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+              {/* gridlines */}
+              {[0.25, 0.5, 0.75, 1.0].map(g => (
+                <g key={g}>
+                  <line x1={PAD_L} x2={PAD_L + CW} y1={PAD_T + CH - g * CH} y2={PAD_T + CH - g * CH}
+                    stroke="rgba(255,255,255,0.05)" strokeDasharray="4 5" />
+                  <text x={PAD_L - 6} y={PAD_T + CH - g * CH + 4} textAnchor="end" fontSize="9" fill="rgba(255,255,255,0.25)"
+                    style={{ fontFamily: 'Inter,sans-serif' }}>{Math.round(g * maxY)}</text>
+                </g>
+              ))}
+              <g transform={`translate(${PAD_L}, ${PAD_T})`}>
+                {/* spam thin dashed */}
+                <path d={linePath(sA, 'spam')} fill="none" stroke={CMP_A} strokeWidth="1" strokeDasharray="4 4" opacity={0.5} />
+                <path d={linePath(sB, 'spam')} fill="none" stroke={CMP_B} strokeWidth="1" strokeDasharray="4 4" opacity={0.5} />
+                {/* msgs lines */}
+                <path d={linePath(sA, 'msgs')} fill="none" stroke={CMP_A} strokeWidth="2" strokeLinecap="round" />
+                <path d={linePath(sB, 'msgs')} fill="none" stroke={CMP_B} strokeWidth="2" strokeLinecap="round" />
+                {/* crosshair */}
+                {hover && (
+                  <line x1={toX(hover.idx)} x2={toX(hover.idx)} y1={0} y2={CH} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 4" />
+                )}
+                {/* hover dots */}
+                {hover && [{ s: sA, c: CMP_A }, { s: sB, c: CMP_B }].map(({ s, c }, k) => {
+                  const d = s[hover.idx];
+                  if (!d) return null;
+                  return <circle key={k} cx={toX(hover.idx)} cy={toY(d.msgs)} r="3.5" fill={c} stroke="rgba(0,0,0,0.6)" strokeWidth="1" />;
+                })}
+              </g>
+              {/* x labels — elapsed */}
+              {xLabels.map(({ i, text }, k) => (
+                <text key={k} x={PAD_L + toX(i)} y={H - 6} fontSize="9" fill="rgba(255,255,255,0.25)"
+                  textAnchor={k === 0 ? 'start' : k === xLabels.length - 1 ? 'end' : 'middle'}
+                  style={{ fontFamily: 'Inter,sans-serif' }}>{text}</text>
+              ))}
+            </svg>
+
+            {/* tooltip */}
+            {hover && (() => {
+              const dA = sA[hover.idx], dB = sB[hover.idx];
+              const flip = hover.x > (wrapRef.current?.clientWidth || 800) - 220;
+              return (
+                <div style={{
+                  position: 'absolute', left: hover.x + (flip ? -12 : 12), top: Math.max(0, hover.y - 30),
+                  transform: flip ? 'translateX(-100%)' : 'none',
+                  background: 'rgba(18,18,24,0.97)', border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '10px', padding: '8px 11px', pointerEvents: 'none', zIndex: 10, minWidth: '170px',
+                }}>
+                  <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginBottom: '5px', fontWeight: 600 }}>
+                    {fmtElapsed(hover.idx)} от начала
+                  </div>
+                  {[
+                    { c: CMP_A, name: a.title || a.channel_name, d: dA },
+                    { c: CMP_B, name: b.title || b.channel_name, d: dB },
+                  ].map(({ c, name, d }, k) => (
+                    <div key={k} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '1.5px 0' }}>
+                      <span style={{ width: '7px', height: '7px', borderRadius: '2px', background: c, flexShrink: 0 }} />
+                      <span style={{ flex: 1, fontSize: '10px', color: 'rgba(255,255,255,0.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '110px' }}>{name}</span>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: c }}>{d ? d.msgs : '—'}</span>
+                      <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>{d ? `спам ${d.spam}` : ''}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+        {/* legend */}
+        <div style={{ display: 'flex', gap: '16px', marginTop: '10px', flexWrap: 'wrap' }}>
+          {[{ c: CMP_A, l: a.title || a.channel_name }, { c: CMP_B, l: b.title || b.channel_name }].map(({ c, l }, k) => (
+            <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'rgba(255,255,255,0.4)', minWidth: 0 }}>
+              <span style={{ width: '10px', height: '3px', borderRadius: '2px', background: c, flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '260px' }}>{l}</span>
+            </span>
+          ))}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>
+            <span style={{ width: '12px', borderTop: '1px dashed rgba(255,255,255,0.4)', display: 'inline-block' }} />
+            спам/мин
+          </span>
+        </div>
+      </div>
+
+      {/* Stats table */}
+      <div style={{ padding: '16px 18px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '10px' }}>
+          Сравнение показателей
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: '0', padding: '0 0 6px', fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          <span />
+          <span style={{ textAlign: 'right', color: CMP_A }}>Стрим A</span>
+          <span style={{ textAlign: 'right', color: CMP_B }}>Стрим B</span>
+        </div>
+        {rows.map(({ label, va, vb, fmt, lowerWins }) => {
+          const aWins = lowerWins ? va < vb : va > vb;
+          const bWins = lowerWins ? vb < va : vb > va;
+          return (
+            <div key={label} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 110px', alignItems: 'center', padding: '7px 0', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+              <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>{label}</span>
+              <span style={{ textAlign: 'right', fontSize: '12px', fontWeight: 700, color: aWins ? '#00c878' : 'rgba(255,255,255,0.75)' }}>{fmt(va)}</span>
+              <span style={{ textAlign: 'right', fontSize: '12px', fontWeight: 700, color: bWins ? '#00c878' : 'rgba(255,255,255,0.75)' }}>{fmt(vb)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
+}
+
 // ─── main ─────────────────────────────────────────────────────────────────────
 export function Analytics({ initialSection, streamEventTick }: { initialSection?: 'mods' | 'streams'; streamEventTick?: number } = {}) {
   const [channels, setChannels] = useState<string[]>([]);
@@ -1363,6 +1763,9 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const [hourCell, setHourCell] = useState<{ x: number; y: number; label: string } | null>(null);
   const [selectedMod, setSelectedMod] = useState<{ mod: TwitchMod; rank: number } | null>(null);
   const [heatmapTooltip, setHeatmapTooltip] = useState<HeatmapTooltip | null>(null);
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareSel, setCompareSel] = useState<number[]>([]);
+  const [comparePair, setComparePair] = useState<[StreamSession, StreamSession] | null>(null);
   const heatmapTooltipCache = useRef<Record<string, any>>({});
 
   useEffect(() => {
@@ -1628,8 +2031,17 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
           </motion.div>
         )}
 
+        {/* ── STREAMS: COMPARISON ── */}
+        {section === 'streams' && !selectedStream && comparePair && (
+          <StreamCompare
+            a={comparePair[0]}
+            b={comparePair[1]}
+            onBack={() => { setComparePair(null); setCompareMode(false); setCompareSel([]); }}
+          />
+        )}
+
         {/* ── STREAMS ── */}
-        {section === 'streams' && !selectedStream && (
+        {section === 'streams' && !selectedStream && !comparePair && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
 
             {/* Activity Heatmap */}
@@ -1841,7 +2253,32 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
             })()}
 
             {streams.length > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                {compareMode && compareSel.length === 2 && (
+                  <button onClick={() => {
+                    const a = streams.find(s => s.id === compareSel[0]);
+                    const b = streams.find(s => s.id === compareSel[1]);
+                    if (a && b) setComparePair([a, b]);
+                  }} style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    padding: '7px 14px', borderRadius: '9px', border: '1px solid rgba(0,200,120,0.35)',
+                    background: 'rgba(0,200,120,0.12)', color: '#00c878',
+                    fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                  }}>
+                    Сравнить выбранные
+                  </button>
+                )}
+                <button onClick={() => { setCompareMode(m => !m); setCompareSel([]); }} style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  padding: '7px 14px', borderRadius: '9px',
+                  border: `1px solid ${compareMode ? 'rgba(160,112,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
+                  background: compareMode ? 'rgba(160,112,255,0.14)' : 'rgba(255,255,255,0.03)',
+                  color: compareMode ? '#c9a8ff' : 'rgba(255,255,255,0.4)',
+                  fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                }}>
+                  <TrendingUp size={11} /> Сравнить
+                  {compareMode && <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>({compareSel.length}/2)</span>}
+                </button>
                 <button onClick={async () => {
                   if (!confirm('Удалить все записи стримов?')) return;
                   await api.delete('/api/admin/streams');
@@ -1870,12 +2307,38 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                   <Calendar size={10} />{date} МСК
                   <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.15)' }}>· {dayStreams.length} {dayStreams.length === 1 ? 'стрим' : 'стрима'}</span>
                 </div>
-                {dayStreams.map(s => (
+                {dayStreams.map(s => {
+                  const selIdx = compareSel.indexOf(s.id);
+                  const selColor = selIdx === 0 ? '#a070ff' : '#00e5cc';
+                  const isSel = selIdx >= 0;
+                  return (
                   <motion.div key={s.id} whileHover={{ x: 4 }}
-                    onClick={() => setSelectedStream(s.id)}
-                    style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 18px', marginBottom: '5px', borderRadius: '12px', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)', transition: 'border-color 0.15s, background 0.15s' }}
-                    onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor = 'rgba(255,255,255,0.1)'; el.style.background = 'rgba(255,255,255,0.04)'; }}
-                    onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor = 'rgba(255,255,255,0.05)'; el.style.background = 'rgba(255,255,255,0.02)'; }}>
+                    onClick={() => {
+                      if (compareMode) {
+                        setCompareSel(prev => {
+                          if (prev.includes(s.id)) return prev.filter(id => id !== s.id);
+                          if (prev.length >= 2) return [prev[1], s.id];
+                          return [...prev, s.id];
+                        });
+                      } else {
+                        setSelectedStream(s.id);
+                      }
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 18px', marginBottom: '5px', borderRadius: '12px', cursor: 'pointer', border: `1px solid ${isSel ? `${selColor}66` : 'rgba(255,255,255,0.05)'}`, background: isSel ? `${selColor}0d` : 'rgba(255,255,255,0.02)', boxShadow: isSel ? `0 0 0 1px ${selColor}44` : 'none', transition: 'border-color 0.15s, background 0.15s' }}
+                    onMouseEnter={e => { if (isSel) return; const el = e.currentTarget as HTMLElement; el.style.borderColor = 'rgba(255,255,255,0.1)'; el.style.background = 'rgba(255,255,255,0.04)'; }}
+                    onMouseLeave={e => { if (isSel) return; const el = e.currentTarget as HTMLElement; el.style.borderColor = 'rgba(255,255,255,0.05)'; el.style.background = 'rgba(255,255,255,0.02)'; }}>
+
+                    {compareMode && (
+                      <div style={{
+                        width: '16px', height: '16px', borderRadius: '5px', flexShrink: 0,
+                        border: `1.5px solid ${isSel ? selColor : 'rgba(255,255,255,0.2)'}`,
+                        background: isSel ? selColor : 'transparent',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '9px', fontWeight: 800, color: '#0a0a10',
+                      }}>
+                        {isSel ? (selIdx === 0 ? 'A' : 'B') : ''}
+                      </div>
+                    )}
 
                     <div style={{ width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0, background: s.ended_at ? 'rgba(255,255,255,0.12)' : '#ff4444', boxShadow: s.ended_at ? 'none' : '0 0 8px #ff444466' }} />
 
@@ -1897,7 +2360,8 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                     </div>
                     <Zap size={12} style={{ color: 'rgba(255,255,255,0.15)', flexShrink: 0 }} />
                   </motion.div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </motion.div>

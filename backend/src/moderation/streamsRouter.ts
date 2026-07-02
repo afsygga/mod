@@ -145,6 +145,62 @@ streamsRouter.get('/:id/stats', async (req: Request, res: Response) => {
   }
 });
 
+// Minute drill-down: what happened in a specific minute of a stream
+streamsRouter.get('/:id/minute-detail', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const minuteStr = req.query.minute as string;
+    if (!minuteStr) return res.status(400).json({ error: 'minute required' });
+    const minuteDate = new Date(minuteStr);
+    if (isNaN(minuteDate.getTime())) return res.status(400).json({ error: 'invalid minute' });
+
+    const { rows: [session] } = await db.query('SELECT * FROM stream_sessions WHERE id=$1', [id]);
+    if (!session) return res.status(404).json({ error: 'not found' });
+
+    const from = minuteDate.toISOString();
+    const to = new Date(minuteDate.getTime() + 60_000).toISOString();
+    const ch = session.channel_name;
+
+    const [phrases, spammers, modActions, totals] = await Promise.all([
+      db.query(`
+        SELECT message, COUNT(*)::int AS c, MAX(spam_score)::int AS max_score
+        FROM messages
+        WHERE channel_name=$1 AND created_at >= $2 AND created_at < $3 AND spam_score >= 70
+        GROUP BY message ORDER BY c DESC, max_score DESC LIMIT 8
+      `, [ch, from, to]),
+      db.query(`
+        SELECT username, COUNT(*)::int AS c, MAX(spam_score)::int AS max_score
+        FROM messages
+        WHERE channel_name=$1 AND created_at >= $2 AND created_at < $3 AND spam_score >= 70
+        GROUP BY username ORDER BY c DESC LIMIT 8
+      `, [ch, from, to]),
+      db.query(`
+        SELECT ml.action, ml.username AS target, ml.created_at,
+               COALESCE(u.twitch_username, ml.performed_by) AS moderator
+        FROM moderation_logs ml
+        LEFT JOIN users u ON u.email = ml.performed_by
+        WHERE ml.channel_name=$1 AND ml.created_at >= $2 AND ml.created_at < ($3::timestamptz + INTERVAL '2 minutes')
+        ORDER BY ml.created_at LIMIT 20
+      `, [ch, from, to]),
+      db.query(`
+        SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE spam_score >= 70)::int AS spam,
+               COUNT(DISTINCT username)::int AS chatters
+        FROM messages WHERE channel_name=$1 AND created_at >= $2 AND created_at < $3
+      `, [ch, from, to]),
+    ]);
+
+    res.json({
+      minute: from,
+      totals: totals.rows[0],
+      top_phrases: phrases.rows,
+      top_spammers: spammers.rows,
+      mod_actions: modActions.rows,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'minute detail failed' });
+  }
+});
+
 // Per-minute message data for a stream session (for zoomed chart)
 streamsRouter.get('/:id/messages-by-minute', async (req: Request, res: Response) => {
   try {
