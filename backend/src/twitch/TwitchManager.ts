@@ -127,6 +127,16 @@ export class TwitchManager {
       client.on('disconnected', (reason) => {
         conn.connected = false;
         logger.warn(`User IRC disconnected ${email}: ${reason}`);
+        // Safety net: bring the global bot back into this user's channels so
+        // chat coverage (spam detection) never goes blind while primary is down.
+        if (this.globalClient) {
+          for (const ch of conn.joinedChannels) {
+            this.globalClient.join(ch).then(
+              () => logger.info(`Global bot re-joined ${ch} (primary ${email} down)`),
+              () => {}
+            );
+          }
+        }
       });
       await client.connect();
       conn.client = client;
@@ -156,10 +166,18 @@ export class TwitchManager {
     const state = this.channels.get(channelName);
     if (!state) return;
 
-    // Strict routing — only the primary IRC connection processes messages.
-    // Otherwise the same message would be analyzed twice if both global and user clients are in chat.
+    // Routing — the primary IRC connection processes messages while it's alive;
+    // if it's down, accept the global bot's copy so detection never goes blind.
+    // The msg-id dedupe below prevents double-processing during overlaps.
     if (state.primaryEmail) {
-      if (ownerEmail !== state.primaryEmail) return;
+      const primaryConn = this.connections.get(state.primaryEmail);
+      const primaryAlive = !!primaryConn?.connected && primaryConn.joinedChannels.has(channelName);
+      if (primaryAlive) {
+        if (ownerEmail !== state.primaryEmail) return;
+      } else {
+        // Primary dead — accept global (null) or the primary itself if it races back
+        if (ownerEmail !== null && ownerEmail !== state.primaryEmail) return;
+      }
     } else {
       if (ownerEmail !== null) return;
     }
