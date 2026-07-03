@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 import { db } from '../database/db';
 import { broadcast } from '../websocket/wsHandler';
 import { logger } from '../utils/logger';
+import { refreshUserToken } from './twitchToken';
 
 const EVENTSUB_URL = 'wss://eventsub.wss.twitch.tv/ws';
 
@@ -44,6 +45,11 @@ export class EventSubManager {
     if (this.started) return;
     this.started = true;
     this.connect(EVENTSUB_URL);
+    // Periodic re-subscribe: picks up tokens that became valid later (re-auth,
+    // refresh) and newly added channels. 409 (already subscribed) is a no-op.
+    setInterval(() => {
+      this.refresh().catch(() => {});
+    }, 10 * 60_000);
   }
 
   private connect(url: string): void {
@@ -126,7 +132,12 @@ export class EventSubManager {
     return null;
   }
 
-  /** All site users with a Twitch OAuth token, usable as moderators. */
+  /**
+   * Site users whose tokens were issued by OUR Twitch app (EventSub requires
+   * the Client-Id header to match the token's client). Manual chatterino
+   * tokens belong to a foreign client and always fail with 401 — they're
+   * filtered out here via oauth2/validate; expired own tokens get refreshed.
+   */
   private async getModeratorTokens(): Promise<ModToken[]> {
     const { rows } = await db.query(
       "SELECT email, twitch_username, twitch_oauth FROM users WHERE twitch_oauth IS NOT NULL AND twitch_username IS NOT NULL"
@@ -134,13 +145,40 @@ export class EventSubManager {
     const clientId = process.env.TWITCH_CLIENT_ID || '';
     const out: ModToken[] = [];
     for (const r of rows) {
-      const token = String(r.twitch_oauth).replace(/^oauth:/, '');
+      let token = String(r.twitch_oauth).replace(/^oauth:/, '');
       const login = String(r.twitch_username).toLowerCase();
+
+      // Validate the token: must be alive and issued by our client id
+      let info = await this.validateToken(token);
+      if (!info || info.client_id !== clientId) {
+        // Dead or foreign token — try refreshing (only works for our own tokens)
+        const fresh = await refreshUserToken(r.email);
+        if (!fresh) {
+          if (info && info.client_id !== clientId) {
+            logger.info(`[eventsub] skip ${login}: token issued by foreign client (manual token)`);
+          }
+          continue;
+        }
+        token = fresh;
+        info = await this.validateToken(token);
+        if (!info || info.client_id !== clientId) continue;
+      }
+
       const headers = { 'Client-Id': clientId, 'Authorization': `Bearer ${token}` };
-      const userId = await this.resolveId(login, headers);
+      const userId = info.user_id || await this.resolveId(login, headers);
       if (userId) out.push({ email: r.email, login, token, userId });
     }
     return out;
+  }
+
+  private async validateToken(token: string): Promise<{ client_id: string; user_id?: string; scopes?: string[] } | null> {
+    try {
+      const r = await fetch('https://id.twitch.tv/oauth2/validate', {
+        headers: { 'Authorization': `OAuth ${token}` },
+      });
+      if (!r.ok) return null;
+      return await r.json() as any;
+    } catch { return null; }
   }
 
   private async subscribeAll(): Promise<void> {
