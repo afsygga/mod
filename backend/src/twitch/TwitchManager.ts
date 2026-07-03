@@ -256,7 +256,9 @@ export class TwitchManager {
         });
       }
 
-      if (analysis.score >= autoMuteThreshold) {
+      // Whitelisted-emote floods go to the queue but are never auto-muted —
+      // hype-moment emote triples are common legit behavior
+      if (analysis.score >= autoMuteThreshold && !analysis.whitelistedFlood) {
         if (cachedSettings.autoMode && state.autoMod !== false) {
           await this.muteUser(channelName, username, cachedSettings.defaultMuteDuration, 'AUTO');
         }

@@ -2,6 +2,8 @@ export interface SpamAnalysis {
   score: number;
   reasons: string[];
   similarityPct: number;
+  /** Сообщение из вайтлиста, но зачтено из-за флуда — в очередь без автомута */
+  whitelistedFlood?: boolean;
 }
 
 interface MessageRecord {
@@ -195,6 +197,7 @@ function countInWindow(history: MessageRecord[], windowMs: number): number {
 
 export class SpamEngine {
   private profiles: Map<string, UserProfile> = new Map();
+  private lastSweep = 0;
   public settings: SpamEngineSettings;
 
   constructor(settings: Partial<SpamEngineSettings> = {}) {
@@ -208,6 +211,16 @@ export class SpamEngine {
   analyze(username: string, message: string): SpamAnalysis {
     const now = Date.now();
     const memWindowMs = this.settings.memWindowSeconds * 1000;
+
+    // Profiles are otherwise pruned only when their user speaks again, so a
+    // 24/7 process accumulates every chatter ever seen — sweep idle ones out
+    if (now - this.lastSweep > 300_000) {
+      this.lastSweep = now;
+      for (const [name, p] of this.profiles) {
+        const last = p.history[p.history.length - 1];
+        if (!last || now - last.ts >= memWindowMs) this.profiles.delete(name);
+      }
+    }
 
     if (!this.profiles.has(username)) {
       this.profiles.set(username, { username, history: [] });
@@ -235,23 +248,29 @@ export class SpamEngine {
     // === WHITELIST CHECK ===
     // If message is dominated by whitelisted phrases/emotes, skip entirely —
     // UNLESS the user is clearly flooding (3+ msgs in 10s): flooding a
-    // whitelisted emote is still spam.
+    // whitelisted emote still gets scored, but only for the moderation queue —
+    // the whitelistedFlood flag tells the caller not to auto-mute (hype-moment
+    // emote triples are common legit behavior).
     const floodNow = countInWindow(profile.history, 10_000) >= 3;
-    if (this.settings.whitelistPhrases.length > 0 && !floodNow) {
-      const msgNorm = msgBasicNorm;
+    let whitelistedFlood = false;
+    if (this.settings.whitelistPhrases.length > 0) {
       const msgLower = message.toLowerCase();
+      let whitelisted = false;
       for (const phrase of this.settings.whitelistPhrases) {
         const p = phrase.toLowerCase().trim();
         if (!p) continue;
         // Exact match
-        if (msgNorm === normalize(phrase)) {
-          return { score: 0, reasons: [], similarityPct: 0 };
-        }
+        if (msgBasicNorm === normalize(phrase)) { whitelisted = true; break; }
         // Message is the phrase repeated (kreygasm kreygasm kreygasm)
         const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         if (msgLower.replace(new RegExp(escaped, 'g'), '').trim() === '') {
-          return { score: 0, reasons: [], similarityPct: 0 };
+          whitelisted = true;
+          break;
         }
+      }
+      if (whitelisted) {
+        if (!floodNow) return { score: 0, reasons: [], similarityPct: 0 };
+        whitelistedFlood = true;
       }
     }
 
@@ -266,14 +285,25 @@ export class SpamEngine {
     // Rules receive raw strings, so bridge them back to the cached record
     // forms; the fallback branches cover strings that aren't history entries
     const normCache = new Map<string, string>();
+    const aggrCache = new Map<string, string>();
     const countsCache = new Map<string, Map<string, number>>();
     for (const r of prevRecs) {
       normCache.set(r.text, r.norm);
+      aggrCache.set(r.text, r.aggr);
       countsCache.set(r.text, r.counts);
     }
     const basicNorm = (m: string): string => {
       let v = normCache.get(m);
       if (v === undefined) { v = normalize(m); normCache.set(m, v); }
+      return v;
+    };
+    // Same normalization form as normalizedMsg — equality checks must compare
+    // like with like, otherwise identical repeats containing digits or mixed
+    // scripts never match (basic keeps "1", aggressive maps it to "i")
+    const matchNorm = (m: string): string => {
+      if (!this.settings.antiEvasion) return basicNorm(m);
+      let v = aggrCache.get(m);
+      if (v === undefined) { v = normalizeAggressive(m); aggrCache.set(m, v); }
       return v;
     };
 
@@ -339,7 +369,7 @@ export class SpamEngine {
     if (msgLen > 0 && msgLen <= 6 && previousMessages.length > 0) {
       // Look for actually similar short messages (not just any short message)
       const verySimilarShorts = previousMessages.filter(m => {
-        const nm = basicNorm(m);
+        const nm = matchNorm(m);
         if (nm.length > 8) return false;
         // Identical
         if (nm === normalizedMsg) return true;
@@ -376,8 +406,8 @@ export class SpamEngine {
       // Only count containment if both are reasonably similar in size
       const containsBoth = !!nm && !!msgBasicNorm &&
         (nm.includes(msgBasicNorm) || msgBasicNorm.includes(nm)) &&
-        Math.min(nm.length, normalizedMsg.length) >= 3 &&
-        Math.abs(nm.length - normalizedMsg.length) <= Math.max(nm.length, normalizedMsg.length) * 0.5;
+        Math.min(nm.length, msgBasicNorm.length) >= 3 &&
+        Math.abs(nm.length - msgBasicNorm.length) <= Math.max(nm.length, msgBasicNorm.length) * 0.5;
       return containsBoth || editVs(m) >= variantThreshold;
     }).length;
     if (variantMatches >= 3) { score += 50; reasons.push('repeated variants'); }
@@ -387,7 +417,7 @@ export class SpamEngine {
 
     // 4. EXACT DUPLICATES — fallback to raw text comparison for emoji-only msgs
     const exactDups = previousMessages.filter(m => {
-      const nm = basicNorm(m);
+      const nm = matchNorm(m);
       if (normalizedMsg) {
         return nm === normalizedMsg;
       }
@@ -524,7 +554,7 @@ export class SpamEngine {
     // though edit distance is low.
     if (this.settings.triggerAfterN > 1) {
       const repeatCount = previousMessages.filter(m => {
-        if (basicNorm(m) === normalizedMsg) return true;
+        if (matchNorm(m) === normalizedMsg) return true;
         if (editVs(m) >= 0.6) return true;
         if (cosVs(m) >= 0.6) return true;
         return false;
@@ -537,7 +567,7 @@ export class SpamEngine {
       }
     }
 
-    return { score, reasons: uniqueReasons, similarityPct: simPct };
+    return { score, reasons: uniqueReasons, similarityPct: simPct, whitelistedFlood };
   }
 
   clearUser(username: string): void {
