@@ -199,8 +199,11 @@ export class SpamEngine {
     profile.history.push({ text: message, ts: now });
 
     // === WHITELIST CHECK ===
-    // If message is dominated by whitelisted phrases/emotes, skip entirely
-    if (this.settings.whitelistPhrases.length > 0) {
+    // If message is dominated by whitelisted phrases/emotes, skip entirely —
+    // UNLESS the user is clearly flooding (3+ msgs in 10s): flooding a
+    // whitelisted emote is still spam.
+    const floodNow = countInWindow(profile.history, 10_000) >= 3;
+    if (this.settings.whitelistPhrases.length > 0 && !floodNow) {
       const msgNorm = normalize(message);
       const msgLower = message.toLowerCase();
       for (const phrase of this.settings.whitelistPhrases) {
@@ -438,17 +441,21 @@ export class SpamEngine {
 
     score = Math.min(100, Math.max(0, Math.round(score)));
 
-    // === TRIGGER AFTER N === 
+    // === TRIGGER AFTER N ===
     // If triggerAfterN > 1, require at least N similar messages from this user
-    // before any score is returned. This prevents reacting on 1st/2nd repeat.
+    // before any score is returned. Repeat matching must be as broad as the
+    // scoring itself — "LUL x3" vs "LUL x9" is the same phrase repeated even
+    // though edit distance is low.
     if (this.settings.triggerAfterN > 1) {
       const repeatCount = previousMessages.filter(m => {
-        // Identical or very similar
         if (normalize(m) === normalizedMsg) return true;
-        return editRatio(m, message) >= 0.7;
+        if (editRatio(m, message) >= 0.6) return true;
+        if (cosineSimilarity(m, message) >= 0.6) return true;
+        return false;
       }).length + 1; // +1 for the current message
 
-      if (repeatCount < this.settings.triggerAfterN) {
+      // Hard flood bypasses the gate entirely
+      if (repeatCount < this.settings.triggerAfterN && !floodNow) {
         // Not enough repeats yet — suppress detection
         return { score: 0, reasons: [], similarityPct: simPct };
       }
