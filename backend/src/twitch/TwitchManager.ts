@@ -224,27 +224,15 @@ export class TwitchManager {
 
     const analysis = state.engine.analyze(username, message);
 
-    const cachedSettings = await this.getCachedSettings();
-    const roleIgnored = cachedSettings.ignoredRoles.includes(role);
-
-    await db.query(
-      'INSERT INTO messages (channel_name, username, message, spam_score, reasons, role) VALUES ($1,$2,$3,$4,$5,$6)',
-      [channelName, username, message, analysis.score, analysis.reasons, role]
-    ).catch(() => {});
-
-    await db.query(
-      `INSERT INTO user_profiles (username, channel_name, message_count, spam_score, last_seen)
-       VALUES ($1,$2,1,$3,NOW())
-       ON CONFLICT (username, channel_name) DO UPDATE
-       SET message_count = user_profiles.message_count + 1,
-           spam_score = $3, last_seen = NOW()`,
-      [username, channelName, analysis.score]
-    ).catch(() => {});
-
+    // UI first, persistence last: broadcasts must never wait on the DB pool —
+    // during a flood queued INSERTs delayed detection in the dashboard by seconds.
     broadcast(this.wss, {
       type: 'message', channel: channelName, username, message, role,
       score: analysis.score, reasons: analysis.reasons, ts: Date.now(),
     });
+
+    const cachedSettings = await this.getCachedSettings();
+    const roleIgnored = cachedSettings.ignoredRoles.includes(role);
 
     const threshold = state.engine.settings.detectThreshold;
     const autoMuteThreshold = state.engine.settings.autoMuteThreshold;
@@ -274,6 +262,20 @@ export class TwitchManager {
         }
       }
     }
+
+    db.query(
+      'INSERT INTO messages (channel_name, username, message, spam_score, reasons, role) VALUES ($1,$2,$3,$4,$5,$6)',
+      [channelName, username, message, analysis.score, analysis.reasons, role]
+    ).catch(() => {});
+
+    db.query(
+      `INSERT INTO user_profiles (username, channel_name, message_count, spam_score, last_seen)
+       VALUES ($1,$2,1,$3,NOW())
+       ON CONFLICT (username, channel_name) DO UPDATE
+       SET message_count = user_profiles.message_count + 1,
+           spam_score = $3, last_seen = NOW()`,
+      [username, channelName, analysis.score]
+    ).catch(() => {});
   }
 
   private getRole(userstate: tmi.ChatUserstate): string {
@@ -810,10 +812,27 @@ export class TwitchManager {
   };
   private readonly SETTINGS_TTL = 10_000; // ms
 
+  private settingsRefreshInFlight: Promise<void> | null = null;
+
   private async getCachedSettings() {
     if (Date.now() - this.settingsCache.lastFetched < this.SETTINGS_TTL) {
       return this.settingsCache;
     }
+    // Stale-while-revalidate: an expired cache still has valid values, so serve
+    // them and refresh in the background — the SELECT queues behind message
+    // INSERTs during a flood and must not block the detection path. Only a
+    // never-populated cache (startup / explicit invalidate) is worth awaiting.
+    if (!this.settingsRefreshInFlight) {
+      this.settingsRefreshInFlight = this.refreshSettingsCache()
+        .finally(() => { this.settingsRefreshInFlight = null; });
+    }
+    if (this.settingsCache.lastFetched === 0) {
+      await this.settingsRefreshInFlight;
+    }
+    return this.settingsCache;
+  }
+
+  private async refreshSettingsCache(): Promise<void> {
     try {
       const { rows } = await db.query(
         "SELECT key, value FROM settings WHERE key IN ('ignored_roles','auto_mode','default_mute_duration','set_game_enabled')"
@@ -831,7 +850,6 @@ export class TwitchManager {
       }
       this.settingsCache.lastFetched = Date.now();
     } catch {}
-    return this.settingsCache;
   }
 
   /** Invalidate settings cache — call after saving settings */

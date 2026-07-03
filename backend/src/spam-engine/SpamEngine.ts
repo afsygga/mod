@@ -7,6 +7,12 @@ export interface SpamAnalysis {
 interface MessageRecord {
   text: string;
   ts: number;
+  // Derived forms are computed once at insert: every later analyze() compares
+  // against this record, and re-normalizing the whole history per message is
+  // what used to make floods CPU-bound
+  norm: string;
+  aggr: string;
+  counts: Map<string, number>;
 }
 
 interface UserProfile {
@@ -97,41 +103,57 @@ function tokenize(text: string): string[] {
   return normalize(text).split(' ').filter(Boolean);
 }
 
-function cosineSimilarity(a: string, b: string): number {
-  const ta = tokenize(a);
-  const tb = tokenize(b);
-  const allWords = [...new Set([...ta, ...tb])];
-  const va = allWords.map(w => ta.filter(x => x === w).length);
-  const vb = allWords.map(w => tb.filter(x => x === w).length);
-  const dot = va.reduce((s, v, i) => s + v * vb[i], 0);
-  const ma = Math.sqrt(va.reduce((s, v) => s + v * v, 0));
-  const mb = Math.sqrt(vb.reduce((s, v) => s + v * v, 0));
-  if (!ma || !mb) return 0;
-  return dot / (ma * mb);
+function tokenCounts(tokens: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const t of tokens) counts.set(t, (counts.get(t) || 0) + 1);
+  return counts;
 }
 
-// Levenshtein distance
+function cosineFromCounts(ca: Map<string, number>, cb: Map<string, number>): number {
+  let dot = 0, sa = 0, sb = 0;
+  for (const [w, v] of ca) {
+    sa += v * v;
+    const vb = cb.get(w);
+    if (vb) dot += v * vb;
+  }
+  for (const v of cb.values()) sb += v * v;
+  if (!sa || !sb) return 0;
+  return dot / (Math.sqrt(sa) * Math.sqrt(sb));
+}
+
+function cosineSimilarity(a: string, b: string): number {
+  return cosineFromCounts(tokenCounts(tokenize(a)), tokenCounts(tokenize(b)));
+}
+
+// Levenshtein distance — two rolling rows instead of a full matrix,
+// analyze() calls this against every history entry so allocation matters
 function levenshtein(a: string, b: string): number {
   const m = a.length, n = b.length;
   if (m === 0) return n;
   if (n === 0) return m;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  let prev = new Array<number>(n + 1);
+  let curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
   for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    const ca = a.charCodeAt(i - 1);
     for (let j = 1; j <= n; j++) {
-      if (a[i-1] === b[j-1]) dp[i][j] = dp[i-1][j-1];
-      else dp[i][j] = 1 + Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
+      if (ca === b.charCodeAt(j - 1)) curr[j] = prev[j - 1];
+      else curr[j] = 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
     }
+    const tmp = prev; prev = curr; curr = tmp;
   }
-  return dp[m][n];
+  return prev[n];
 }
 
 // Edit-distance ratio: 1.0 = identical, 0 = completely different
 // Falls back to raw text when normalized is empty (e.g. emoji-only messages)
 function editRatio(a: string, b: string): number {
-  let na = normalize(a);
-  let nb = normalize(b);
+  return editRatioFromNorm(normalize(a), normalize(b), a, b);
+}
+
+// Same as editRatio but takes pre-computed normalized forms
+function editRatioFromNorm(na: string, nb: string, a: string, b: string): number {
   if (!na && !nb) {
     // Both messages normalized to empty — compare raw (handles emoji spam)
     na = a.trim();
@@ -139,6 +161,12 @@ function editRatio(a: string, b: string): number {
   }
   if (!na && !nb) return 1;
   if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  // Levenshtein is O(len²); wall-of-text spam is identical in its first
+  // hundred chars anyway, so cap the compared length
+  if (na.length > 120) na = na.slice(0, 120);
+  if (nb.length > 120) nb = nb.slice(0, 120);
+  if (na === nb) return 1;
   const maxLen = Math.max(na.length, nb.length);
   const dist = levenshtein(na, nb);
   return 1 - (dist / maxLen);
@@ -157,14 +185,6 @@ function hasRepetitivePattern(text: string): boolean {
 // Get character set — short messages with only 2-3 unique chars are usually spam
 function uniqueChars(text: string): number {
   return new Set(normalize(text).replace(/\s/g, '')).size;
-}
-
-// Check if one string is contained/prefix of another (for variant detection)
-function isContainsOrPrefix(a: string, b: string): boolean {
-  const na = normalize(a);
-  const nb = normalize(b);
-  if (!na || !nb) return false;
-  return na.includes(nb) || nb.includes(na);
 }
 
 // Count messages in last N ms
@@ -194,9 +214,23 @@ export class SpamEngine {
     }
     const profile = this.profiles.get(username)!;
 
-    // Prune
+    // Prune by time, then cap by count: every rule compares against the whole
+    // history, so an unbounded flood makes analyze() O(n²) and stalls the event
+    // loop for every channel. 50 messages inside the window is already a flood
+    // the burst rules catch on their own.
     profile.history = profile.history.filter(m => now - m.ts < memWindowMs);
-    profile.history.push({ text: message, ts: now });
+    const msgBasicNorm = normalize(message);
+    const cur: MessageRecord = {
+      text: message,
+      ts: now,
+      norm: msgBasicNorm,
+      aggr: normalizeAggressive(message),
+      counts: tokenCounts(msgBasicNorm.split(' ').filter(Boolean)),
+    };
+    profile.history.push(cur);
+    if (profile.history.length > 50) {
+      profile.history.splice(0, profile.history.length - 50);
+    }
 
     // === WHITELIST CHECK ===
     // If message is dominated by whitelisted phrases/emotes, skip entirely —
@@ -204,7 +238,7 @@ export class SpamEngine {
     // whitelisted emote is still spam.
     const floodNow = countInWindow(profile.history, 10_000) >= 3;
     if (this.settings.whitelistPhrases.length > 0 && !floodNow) {
-      const msgNorm = normalize(message);
+      const msgNorm = msgBasicNorm;
       const msgLower = message.toLowerCase();
       for (const phrase of this.settings.whitelistPhrases) {
         const p = phrase.toLowerCase().trim();
@@ -223,19 +257,55 @@ export class SpamEngine {
 
     let score = 0;
     const reasons: string[] = [];
+    const prevRecs = profile.history.slice(0, -1); // all except current
     const recent = profile.history.map(m => m.text);
-    // Pick normalization: aggressive if anti-evasion enabled
-    const normalizeFn = this.settings.antiEvasion ? normalizeAggressive : normalize;
-    const normalizedMsg = normalizeFn(message);
+    const normalizedMsg = this.settings.antiEvasion ? cur.aggr : cur.norm;
     const msgLen = normalizedMsg.length;
-    const previousMessages = recent.slice(0, -1); // all except current
+    const previousMessages = prevRecs.map(r => r.text);
+
+    // Rules receive raw strings, so bridge them back to the cached record
+    // forms; the fallback branches cover strings that aren't history entries
+    const normCache = new Map<string, string>();
+    const countsCache = new Map<string, Map<string, number>>();
+    for (const r of prevRecs) {
+      normCache.set(r.text, r.norm);
+      countsCache.set(r.text, r.counts);
+    }
+    const basicNorm = (m: string): string => {
+      let v = normCache.get(m);
+      if (v === undefined) { v = normalize(m); normCache.set(m, v); }
+      return v;
+    };
+
+    // Several rules compare the current message against the same history
+    // entries — memoize the expensive pairwise metrics for this call
+    const editMemo = new Map<string, number>();
+    const editVs = (m: string): number => {
+      let v = editMemo.get(m);
+      if (v === undefined) {
+        v = editRatioFromNorm(basicNorm(m), msgBasicNorm, m, message);
+        editMemo.set(m, v);
+      }
+      return v;
+    };
+    const cosMemo = new Map<string, number>();
+    const cosVs = (m: string): number => {
+      let v = cosMemo.get(m);
+      if (v === undefined) {
+        let c = countsCache.get(m);
+        if (!c) { c = tokenCounts(tokenize(m)); countsCache.set(m, c); }
+        v = cosineFromCounts(c, cur.counts);
+        cosMemo.set(m, v);
+      }
+      return v;
+    };
 
     // === ANTI-EVASION DETECTION ===
     // If aggressive normalization differs significantly from basic normalization,
     // user is likely trying to evade detection
     if (this.settings.antiEvasion) {
-      const basic = normalize(message);
-      const aggressive = normalizeAggressive(message);
+      const basic = cur.norm;
+      const aggressive = cur.aggr;
       // If aggressive collapsed a lot of structure (e.g. spaced letters)
       if (basic.length > 0 && aggressive.length > 0 && aggressive.length < basic.length * 0.7) {
         score += 25;
@@ -269,7 +339,7 @@ export class SpamEngine {
     if (msgLen > 0 && msgLen <= 6 && previousMessages.length > 0) {
       // Look for actually similar short messages (not just any short message)
       const verySimilarShorts = previousMessages.filter(m => {
-        const nm = normalize(m);
+        const nm = basicNorm(m);
         if (nm.length > 8) return false;
         // Identical
         if (nm === normalizedMsg) return true;
@@ -278,7 +348,7 @@ export class SpamEngine {
           if (nm.includes(normalizedMsg) || normalizedMsg.includes(nm)) return true;
         }
         // High edit-similarity (≥0.7 for short strings = nearly identical)
-        return editRatio(m, message) >= 0.7;
+        return editVs(m) >= 0.7;
       });
 
       if (verySimilarShorts.length >= 2) {
@@ -302,12 +372,13 @@ export class SpamEngine {
     // Higher threshold for short messages to avoid false positives on normal words
     const variantThreshold = msgLen <= 6 ? 0.8 : 0.6;
     const variantMatches = previousMessages.filter(m => {
-      const nm = normalize(m);
+      const nm = basicNorm(m);
       // Only count containment if both are reasonably similar in size
-      const containsBoth = isContainsOrPrefix(m, message) &&
+      const containsBoth = !!nm && !!msgBasicNorm &&
+        (nm.includes(msgBasicNorm) || msgBasicNorm.includes(nm)) &&
         Math.min(nm.length, normalizedMsg.length) >= 3 &&
         Math.abs(nm.length - normalizedMsg.length) <= Math.max(nm.length, normalizedMsg.length) * 0.5;
-      return containsBoth || editRatio(m, message) >= variantThreshold;
+      return containsBoth || editVs(m) >= variantThreshold;
     }).length;
     if (variantMatches >= 3) { score += 50; reasons.push('repeated variants'); }
     else if (variantMatches >= 2) { score += 30; reasons.push('similar variants'); }
@@ -316,7 +387,7 @@ export class SpamEngine {
 
     // 4. EXACT DUPLICATES — fallback to raw text comparison for emoji-only msgs
     const exactDups = previousMessages.filter(m => {
-      const nm = normalize(m);
+      const nm = basicNorm(m);
       if (normalizedMsg) {
         return nm === normalizedMsg;
       }
@@ -331,29 +402,34 @@ export class SpamEngine {
     // 4b. EMOJI/SYMBOL FLOOD — detect repeating emoji spam even if not exact
     if (!normalizedMsg && message.trim().length > 0) {
       // Count ALL emoji-only messages from this user regardless of which emoji
-      const emojiOnlyPrev = previousMessages.filter(m => !normalize(m));
+      const emojiOnlyPrev = previousMessages.filter(m => !basicNorm(m));
       if (emojiOnlyPrev.length >= 3) { score += 60; reasons.push('emoji flood'); }
       else if (emojiOnlyPrev.length >= 2) { score += 40; reasons.push('emoji flood'); }
       else if (emojiOnlyPrev.length >= 1) {
         // Also check similarity for single previous
-        const similar = emojiOnlyPrev.filter(m => editRatio(m, message) >= 0.4).length;
+        const similar = emojiOnlyPrev.filter(m => editVs(m) >= 0.4).length;
         if (similar >= 1) { score += 30; reasons.push('emoji repeat'); }
       }
     }
 
     // 4d. ROTATION PATTERN — A→B→A→B bot cycling between messages
     if (normalizedMsg && previousMessages.length >= 2) {
-      const histNorms = previousMessages.map(m => normalizeFn(m));
+      const histNorms = prevRecs.map(r => this.settings.antiEvasion ? r.aggr : r.norm);
       const matchIdxs = histNorms.reduce<number[]>((acc, nm, i) => {
-        if (nm === normalizedMsg || editRatio(previousMessages[i], message) >= 0.8) acc.push(i);
+        if (nm === normalizedMsg || editVs(previousMessages[i]) >= 0.8) acc.push(i);
         return acc;
       }, []);
       if (matchIdxs.length >= 1) {
         // Check that there's at least one DIFFERENT message between the first match and now
         const firstMatch = matchIdxs[0];
-        const hasDifferentBetween = histNorms.slice(firstMatch + 1).some(
-          nm => nm !== normalizedMsg && nm.length > 0 && editRatio(nm, normalizedMsg) < 0.7
-        );
+        const normEditMemo = new Map<string, number>();
+        const hasDifferentBetween = histNorms.slice(firstMatch + 1).some(nm => {
+          if (nm === normalizedMsg || nm.length === 0) return false;
+          let v = normEditMemo.get(nm);
+          // Both strings are already normalized — pass them through directly
+          if (v === undefined) { v = editRatioFromNorm(nm, normalizedMsg, nm, normalizedMsg); normEditMemo.set(nm, v); }
+          return v < 0.7;
+        });
         if (hasDifferentBetween) {
           score += matchIdxs.length >= 2 ? 50 : 35;
           reasons.push('rotation pattern');
@@ -376,7 +452,7 @@ export class SpamEngine {
       );
     };
     if (isEmoteOnly(message)) {
-      const emoteRepeats = previousMessages.filter(m => isEmoteOnly(m) && editRatio(m, message) >= 0.6).length;
+      const emoteRepeats = previousMessages.filter(m => isEmoteOnly(m) && editVs(m) >= 0.6).length;
       if (emoteRepeats >= 2) { score += 50; reasons.push('emote flood'); }
       else if (emoteRepeats >= 1) { score += 30; reasons.push('emote repeat'); }
     }
@@ -394,7 +470,7 @@ export class SpamEngine {
     let maxSim = 0;
     let similarCount = 0; // how many previous messages are similar to current
     for (const prev of previousMessages) {
-      const sim = cosineSimilarity(message, prev);
+      const sim = cosVs(prev);
       if (sim > maxSim) maxSim = sim;
       if (sim >= 0.5) similarCount++;
     }
@@ -448,9 +524,9 @@ export class SpamEngine {
     // though edit distance is low.
     if (this.settings.triggerAfterN > 1) {
       const repeatCount = previousMessages.filter(m => {
-        if (normalize(m) === normalizedMsg) return true;
-        if (editRatio(m, message) >= 0.6) return true;
-        if (cosineSimilarity(m, message) >= 0.6) return true;
+        if (basicNorm(m) === normalizedMsg) return true;
+        if (editVs(m) >= 0.6) return true;
+        if (cosVs(m) >= 0.6) return true;
         return false;
       }).length + 1; // +1 for the current message
 
