@@ -34,6 +34,8 @@ export class TwitchManager {
   private globalSettings = { ...defaultSettings };
   // Fallback global bot from env (legacy mode)
   private globalClient: tmi.Client | null = null;
+  // Guards the refresh-and-reconnect loop for user IRC auth failures
+  private lastAuthReconnect: Map<string, number> = new Map();
 
   constructor(wss: WebSocketServer) {
     this.wss = wss;
@@ -49,13 +51,53 @@ export class TwitchManager {
     }
     this.globalClient = new tmi.Client({
       options: { debug: false },
+      connection: { reconnect: true, secure: true, maxReconnectAttempts: Infinity },
       identity: { username, password: oauth },
       channels: [],
     });
     this.globalClient.on('message', (ch, us, msg, self) => this.handleMessage(null, ch, us, msg, self));
-    this.globalClient.on('connected', () => logger.info('Global Twitch IRC connected'));
-    this.globalClient.on('disconnected', (reason) => logger.warn(`Global IRC disconnected: ${reason}`));
+    this.globalClient.on('connected', () => {
+      logger.info('Global Twitch IRC connected');
+      // The client was created with an empty channel list and joins dynamically,
+      // so after a reconnect nothing is covered unless we explicitly rejoin.
+      this.rejoinGlobalChannels().catch(err => logger.error('Global rejoin failed', err));
+    });
+    this.globalClient.on('disconnected', (reason) => {
+      // tmi.js permanently disables its own reconnect on auth failures, so an
+      // expired TWITCH_BOT_OAUTH kills the global bot for good. It's a static
+      // env token with no refresh_token — we can't heal it here; log loudly so
+      // it's obvious the env token must be regenerated. Per-user connections
+      // (refreshable) keep ingestion alive in the meantime.
+      if (/login|authentication|auth/i.test(reason || '')) {
+        logger.error(`Global IRC auth failed (${reason}) — TWITCH_BOT_OAUTH is expired/invalid and must be regenerated. Falling back to per-user connections.`);
+      } else {
+        logger.warn(`Global IRC disconnected: ${reason}`);
+      }
+    });
     this.globalClient.connect().catch(err => logger.error('Global Twitch connect error', err));
+  }
+
+  /**
+   * Rejoin every channel the global bot is responsible for after a (re)connect.
+   * Skips channels actively covered by a live user primary. On the very first
+   * connect this.channels is still empty, so it no-ops and the startup join loop
+   * handles initial coverage; on reconnects it restores everything.
+   */
+  private async rejoinGlobalChannels(): Promise<void> {
+    if (!this.globalClient) return;
+    for (const ch of this.getChannelNames()) {
+      const state = this.channels.get(ch);
+      if (state?.primaryEmail) {
+        const conn = this.connections.get(state.primaryEmail);
+        if (conn?.connected && conn.joinedChannels.has(ch)) continue; // live user primary covers it
+      }
+      try {
+        await this.globalClient.join(ch);
+        logger.info(`Global bot rejoined ${ch}`);
+      } catch (err: any) {
+        if (!/already/i.test(err?.message || '')) logger.warn(`Global rejoin ${ch} failed: ${err?.message}`);
+      }
+    }
   }
 
   /**
@@ -90,6 +132,9 @@ export class TwitchManager {
     try {
       const client = new tmi.Client({
         options: { debug: false },
+        // Same reason as the global client — auto-reconnect so a dropped socket
+        // recovers; the 'connected' handler below re-joins this user's channels.
+        connection: { reconnect: true, secure: true, maxReconnectAttempts: Infinity },
         identity: { username: conn.username, password: conn.oauth },
         channels: [],
       });
@@ -136,6 +181,12 @@ export class TwitchManager {
               () => {}
             );
           }
+        }
+        // Auth failure means the token expired: tmi.js has now disabled its own
+        // reconnect for this client, so refresh the token and rebuild the
+        // connection. Guarded so a token that keeps getting rejected can't spin.
+        if (/login|authentication|auth/i.test(reason || '')) {
+          this.refreshAndReconnectUser(email).catch(() => {});
         }
       });
       await client.connect();
@@ -1156,6 +1207,77 @@ export class TwitchManager {
     }
   }
 
+
+  /**
+   * Re-establish IRC connections for every user with stored Twitch creds.
+   * On a cold start only the global bot connects; without this, per-user
+   * primary coverage (and mod-action attribution) stays gone after a restart
+   * until each user logs in again. Tokens are refreshed first: IRC validates
+   * the token only at connect time, and a stale one fails "Login
+   * authentication failed", after which tmi.js disables reconnect for good.
+   */
+  async restoreUserConnections(): Promise<void> {
+    let rows: any[] = [];
+    try {
+      ({ rows } = await db.query(
+        `SELECT DISTINCT cs.user_email AS email, u.twitch_username, u.twitch_refresh
+         FROM channel_subscribers cs
+         JOIN users u ON u.email = cs.user_email
+         WHERE u.twitch_username IS NOT NULL AND u.twitch_oauth IS NOT NULL`
+      ));
+    } catch (err) {
+      logger.error('restoreUserConnections query failed', err);
+      return;
+    }
+    let ok = 0;
+    for (const r of rows) {
+      try {
+        let oauth: string | null = null;
+        if (r.twitch_refresh) {
+          const fresh = await refreshUserToken(r.email);
+          if (fresh) oauth = `oauth:${fresh}`;
+        }
+        if (!oauth) {
+          // No refresh token or refresh failed — try the stored token as-is
+          const { rows: u } = await db.query('SELECT twitch_oauth FROM users WHERE email=$1', [r.email]);
+          oauth = u[0]?.twitch_oauth || null;
+        }
+        if (!oauth) continue;
+        await this.ensureUserConnection(r.email, r.twitch_username, oauth);
+        await this.forceRejoinUserChannels(r.email);
+        ok++;
+      } catch (err: any) {
+        logger.error(`restoreUserConnections: ${r.email} failed: ${err?.message}`);
+      }
+    }
+    logger.info(`[irc] restored ${ok}/${rows.length} user connection(s)`);
+  }
+
+  /**
+   * Refresh a user's Twitch token and rebuild their IRC connection after an
+   * auth-failure disconnect. Rate-limited per user so a token that keeps being
+   * rejected (revoked grant, missing chat scope) can't spin a reconnect loop.
+   */
+  private async refreshAndReconnectUser(email: string): Promise<void> {
+    const now = Date.now();
+    if (now - (this.lastAuthReconnect.get(email) || 0) < 300_000) return; // 5-min guard
+    this.lastAuthReconnect.set(email, now);
+
+    const fresh = await refreshUserToken(email);
+    if (!fresh) {
+      logger.warn(`[irc] ${email}: token refresh failed — user must re-authorize via OAuth`);
+      return;
+    }
+    try {
+      const { rows } = await db.query('SELECT twitch_username FROM users WHERE email=$1', [email]);
+      if (!rows[0]?.twitch_username) return;
+      await this.ensureUserConnection(email, rows[0].twitch_username, `oauth:${fresh}`);
+      await this.forceRejoinUserChannels(email);
+      logger.info(`[irc] ${email}: reconnected with refreshed token`);
+    } catch (err: any) {
+      logger.error(`[irc] ${email}: reconnect after refresh failed: ${err?.message}`);
+    }
+  }
 
   isConnected(): boolean {
     return this.globalClient?.readyState() === 'OPEN' || this.connections.size > 0;

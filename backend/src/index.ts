@@ -251,6 +251,10 @@ async function start() {
       await twitchManager.joinChannel(row.name);
     }
 
+    // Restore per-user IRC connections so channels with a user primary get
+    // their own coverage back after a restart (not just the global bot).
+    await twitchManager.restoreUserConnections();
+
     // Start background stream poller — tracks stream start/end 24/7,
     // independent of whether any browser has the dashboard open.
     twitchManager.startStreamPoller();
