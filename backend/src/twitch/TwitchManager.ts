@@ -5,7 +5,7 @@ import { db } from '../database/db';
 import { broadcast } from '../websocket/wsHandler';
 import { logger } from '../utils/logger';
 import { TelegramBot } from '../telegram/TelegramBot';
-import { refreshUserToken, refreshBroadcasterToken } from './twitchToken';
+import { refreshUserToken, refreshBroadcasterToken, getAppToken } from './twitchToken';
 
 interface UserConnection {
   email: string;
@@ -632,6 +632,11 @@ export class TwitchManager {
     for (const r of bt) add(r.access_token);
     // 3. Env bot token
     add(process.env.TWITCH_BOT_OAUTH || '');
+    // 4. App access token — public endpoints like /streams accept it, it's
+    // mintable at any time, so stream tracking survives even when every
+    // user token above is dead
+    const app = await getAppToken();
+    if (app) add(app);
     return out;
   }
 
