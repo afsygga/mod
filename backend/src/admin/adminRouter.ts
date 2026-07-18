@@ -163,12 +163,24 @@ adminRouter.get('/bans', async (req: Request, res: Response) => {
 // ============================================================================
 adminRouter.get('/logs', async (req: Request, res: Response) => {
   const limit = parseInt((req.query.limit as string) || '500');
+  const moderator = ((req.query.moderator as string) || '').trim();
+  const params: any[] = [];
+  let where = '';
+  if (moderator) {
+    // performed_by is a site email or a Twitch login; match either the login
+    // directly or the email of the user whose twitch_username is that login.
+    const p = params.push(moderator);
+    where = `WHERE (ml.performed_by = $${p}
+             OR ml.performed_by IN (SELECT email FROM users WHERE LOWER(twitch_username)=LOWER($${p})))`;
+  }
+  const limitP = params.push(limit);
   const { rows } = await db.query(
     `SELECT ml.*, COALESCE(u.twitch_username, u.name, ml.performed_by) AS performed_by_display
      FROM moderation_logs ml
      LEFT JOIN users u ON u.email = ml.performed_by
-     ORDER BY ml.created_at DESC LIMIT $1`,
-    [limit]
+     ${where}
+     ORDER BY ml.created_at DESC LIMIT $${limitP}`,
+    params
   );
   res.json(rows);
 });

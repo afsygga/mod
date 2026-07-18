@@ -4,11 +4,11 @@ import {
   Users, Mail, Tv2, Activity, BarChart3, Trash2, Shield, ShieldOff,
   UserPlus, Search, Crown, X, Plus, TrendingUp, MessageSquare, Zap,
   VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown, Circle, Clock, Wifi, ShieldCheck, ScrollText,
-  RefreshCw,
+  RefreshCw, UserCheck, ArrowLeft,
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
-type Tab = 'overview' | 'users' | 'whitelist' | 'channels' | 'logs' | 'bans' | 'audit';
+type Tab = 'overview' | 'users' | 'whitelist' | 'channels' | 'logs' | 'moderators' | 'bans' | 'audit';
 
 interface AdminUser {
   id: number; email: string; name: string | null; picture: string | null;
@@ -42,6 +42,7 @@ export function AdminPanel() {
           ['channels', Tv2, 'Все каналы'],
           ['bans', Ban, 'Баны'],
           ['logs', Activity, 'Все логи'],
+          ['moderators', UserCheck, 'Модераторы'],
           ['audit', ScrollText, 'Аудит'],
         ] as const).map(([id, Icon, label]) => {
           const active = tab === id;
@@ -71,6 +72,7 @@ export function AdminPanel() {
         {tab === 'channels' && <ChannelsTab />}
         {tab === 'bans' && <BansTab />}
         {tab === 'logs' && <LogsTab />}
+        {tab === 'moderators' && <ModeratorsTab />}
         {tab === 'audit' && <AuditTab />}
       </div>
     </div>
@@ -1525,6 +1527,262 @@ function BansTab() {
             </span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// MODERATORS — per-moderator action log
+// ============================================================================
+interface ModRow {
+  twitch_username: string;
+  display_name: string | null;
+  twitch_avatar: string | null;
+  twitch_display_name: string | null;
+  mutes: number;
+  auto_mutes: number;
+  bans: number;
+  unbans: number;
+  total: number;
+  last_action: string | null;
+}
+
+function modName(m: ModRow): string {
+  return m.twitch_display_name || m.display_name || m.twitch_username;
+}
+
+function ModeratorsTab() {
+  const [mods, setMods] = useState<ModRow[]>([]);
+  const [q, setQ] = useState('');
+  const [selected, setSelected] = useState<ModRow | null>(null);
+
+  useEffect(() => {
+    api.get<ModRow[]>('/api/admin/stats/moderators').then(setMods).catch(console.error);
+  }, []);
+
+  if (selected) {
+    return <ModeratorDetail mod={selected} onBack={() => setSelected(null)} />;
+  }
+
+  const filtered = mods.filter(m =>
+    !q || modName(m).toLowerCase().includes(q.toLowerCase()) || m.twitch_username.toLowerCase().includes(q.toLowerCase())
+  );
+
+  return (
+    <div>
+      <h2 style={{ fontSize: '22px', fontWeight: 700, marginBottom: '4px' }}>Модераторы</h2>
+      <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '16px' }}>
+        Нажми на модератора, чтобы увидеть весь список его действий
+      </p>
+
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '8px',
+        padding: '8px 14px', borderRadius: '11px', marginBottom: '16px', maxWidth: '320px',
+        background: 'rgba(255,255,255,0.025)',
+      }}>
+        <Search size={13} style={{ color: 'rgba(255,255,255,0.4)' }} />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск модератора..."
+          style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'rgba(255,255,255,0.9)', fontSize: '12px' }} />
+      </div>
+
+      <div className="glass-card" style={{ overflow: 'hidden' }}>
+        {filtered.length === 0 ? (
+          <div style={{ padding: '32px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Нет модераторов</div>
+        ) : filtered.map((m, i) => (
+          <button key={m.twitch_username} onClick={() => setSelected(m)} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: '12px',
+            padding: '11px 18px', borderBottom: '1px solid rgba(255,255,255,0.04)',
+            background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.2)', minWidth: '18px' }}>#{i + 1}</span>
+            {m.twitch_avatar ? (
+              <img src={m.twitch_avatar} alt="" style={{ width: 34, height: 34, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+            ) : (
+              <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(160,112,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: '#a070ff', flexShrink: 0 }}>
+                {modName(m)[0]?.toUpperCase()}
+              </div>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.92)', fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{modName(m)}</div>
+              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '1px' }}>
+                @{m.twitch_username}{m.last_action ? ` · последнее ${relativeTime(m.last_action)}` : ''}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+              <StatChip label="мут" value={m.mutes + m.auto_mutes} color="#ffc800" />
+              <StatChip label="бан" value={m.bans} color="#ff5959" />
+              <StatChip label="разбан" value={m.unbans} color="#00c878" />
+            </div>
+            <div style={{ textAlign: 'right', flexShrink: 0, minWidth: '54px' }}>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'rgba(255,255,255,0.9)', lineHeight: 1 }}>{m.total.toLocaleString()}</div>
+              <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>всего</div>
+            </div>
+            <ChevronDown size={14} style={{ color: 'rgba(255,255,255,0.25)', transform: 'rotate(-90deg)', flexShrink: 0 }} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatChip({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div style={{
+      padding: '3px 8px', borderRadius: '7px', textAlign: 'center', minWidth: '42px',
+      background: value > 0 ? `${color}18` : 'rgba(255,255,255,0.03)',
+    }}>
+      <div style={{ fontSize: '12px', fontWeight: 700, color: value > 0 ? color : 'rgba(255,255,255,0.3)', lineHeight: 1.1 }}>{value}</div>
+      <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</div>
+    </div>
+  );
+}
+
+function ModeratorDetail({ mod, onBack }: { mod: ModRow; onBack: () => void }) {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [actionFilter, setActionFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    api.get<any[]>(`/api/admin/logs?moderator=${encodeURIComponent(mod.twitch_username)}&limit=500`)
+      .then(setLogs).catch(console.error).finally(() => setLoading(false));
+  }, [mod.twitch_username]);
+
+  const filtered = logs.filter(l => actionFilter === 'all' || l.action === actionFilter);
+  const GRID = '82px 110px 110px minmax(120px,1fr) 46px minmax(120px,1.2fr) 56px';
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  return (
+    <div>
+      {/* Header with back button + moderator identity */}
+      <button onClick={onBack} style={{
+        display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px',
+        padding: '6px 12px', borderRadius: '9px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+        background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.6)', border: '1px solid rgba(255,255,255,0.07)',
+      }}>
+        <ArrowLeft size={13} /> К списку
+      </button>
+
+      <div className="glass-card" style={{ padding: '18px 22px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+        {mod.twitch_avatar ? (
+          <img src={mod.twitch_avatar} alt="" style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(160,112,255,0.4)' }} />
+        ) : (
+          <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(160,112,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', fontWeight: 700, color: '#a070ff' }}>
+            {modName(mod)[0]?.toUpperCase()}
+          </div>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '18px', fontWeight: 800, color: '#fff' }}>{modName(mod)}</div>
+          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>@{mod.twitch_username}</div>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <StatChip label="мут" value={mod.mutes + mod.auto_mutes} color="#ffc800" />
+          <StatChip label="бан" value={mod.bans} color="#ff5959" />
+          <StatChip label="разбан" value={mod.unbans} color="#00c878" />
+          <StatChip label="всего" value={mod.total} color="#a070ff" />
+        </div>
+      </div>
+
+      {/* Action filters */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        {LOGS_ACTION_FILTERS.map(({ key, label }) => {
+          const active = actionFilter === key;
+          const meta = key === 'all' ? null : ACTION_META[key];
+          return (
+            <button key={key} onClick={() => setActionFilter(key)} style={{
+              padding: '6px 11px', borderRadius: '8px', fontSize: '11px', fontWeight: 600,
+              cursor: 'pointer', border: 'none', outline: 'none',
+              background: active ? (meta?.bg || 'rgba(255,255,255,0.08)') : 'rgba(255,255,255,0.02)',
+              color: active ? (meta?.color || '#ffffff') : 'rgba(255,255,255,0.45)',
+            }}>{label}</button>
+          );
+        })}
+        <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'rgba(255,255,255,0.35)', padding: '4px 10px', borderRadius: '999px', background: 'rgba(255,255,255,0.02)' }}>
+          {filtered.length} действий
+        </span>
+      </div>
+
+      {/* Log table */}
+      <div style={{
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+        borderRadius: '14px', overflow: 'hidden', maxHeight: 'calc(100vh - 320px)', overflowY: 'auto',
+      }}>
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 5,
+          display: 'grid', gridTemplateColumns: GRID, gap: '10px', alignItems: 'center',
+          padding: '9px 16px', background: 'rgba(10,10,16,0.95)',
+          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+          color: 'rgba(255,255,255,0.3)',
+        }}>
+          <div>Время</div>
+          <div>Действие</div>
+          <div>Канал</div>
+          <div>Пользователь</div>
+          <div>Счёт</div>
+          <div>Сообщение</div>
+          <div>Длит.</div>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: '32px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Загрузка...</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: '32px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Нет действий</div>
+        ) : filtered.slice(0, 500).map(l => {
+          const meta = ACTION_META[l.action] || { color: 'rgba(255,255,255,0.5)', bg: 'rgba(255,255,255,0.05)', icon: Activity, label: l.action };
+          const Icon = meta.icon;
+          const d = new Date(l.created_at);
+          return (
+            <div key={l.id} style={{
+              display: 'grid', gridTemplateColumns: GRID, gap: '10px', alignItems: 'center',
+              padding: '7px 16px', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '12px',
+            }}>
+              <div>
+                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
+                  {pad(d.getHours())}:{pad(d.getMinutes())}:{pad(d.getSeconds())}
+                </div>
+                <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.25)' }}>
+                  {pad(d.getDate())}.{pad(d.getMonth() + 1)}
+                </div>
+              </div>
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: '4px', justifySelf: 'start',
+                padding: '3px 8px', borderRadius: '7px',
+                background: meta.bg, color: meta.color, fontWeight: 700, fontSize: '9px',
+                textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap',
+              }}>
+                <Icon size={9} />{meta.label}
+              </div>
+              <div style={{ color: '#ffc800', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {l.channel_name}
+              </div>
+              <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.88)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {l.username}
+              </div>
+              <div>
+                {l.spam_score > 0 ? (
+                  <span style={{
+                    display: 'inline-block', fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '6px',
+                    background: l.spam_score >= 90 ? 'rgba(255,89,89,0.12)' : l.spam_score >= 70 ? 'rgba(255,200,0,0.1)' : 'rgba(255,255,255,0.04)',
+                    color: l.spam_score >= 90 ? '#ff5959' : l.spam_score >= 70 ? '#ffc800' : 'rgba(255,255,255,0.5)',
+                  }}>{l.spam_score}</span>
+                ) : <span style={{ color: 'rgba(255,255,255,0.2)' }}>—</span>}
+              </div>
+              <div title={l.message || ''} style={{
+                fontSize: '11px', color: 'rgba(255,255,255,0.4)', fontStyle: 'italic',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {l.message || '—'}
+              </div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.5)' }}>
+                {formatLogDuration(l.duration_seconds)}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
