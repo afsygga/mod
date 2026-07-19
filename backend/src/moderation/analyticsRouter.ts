@@ -164,10 +164,16 @@ analyticsRouter.get('/channels/:channel/moderators', async (req: Request, res: R
 analyticsRouter.get('/stats/moderators', async (req: Request, res: Response) => {
   try {
     const channel = req.query.channel as string | undefined;
+    const from = req.query.from as string | undefined;
+    const to = req.query.to as string | undefined;
     const params: any[] = [];
     const channelFilter = channel
       ? `AND ml.channel_name = $${params.push(channel)}`
       : '';
+    // Optional day/range filter — from inclusive, to exclusive (ISO timestamps)
+    let dateFilter = '';
+    if (from) dateFilter += ` AND ml.created_at >= $${params.push(from)}`;
+    if (to) dateFilter += ` AND ml.created_at < $${params.push(to)}`;
 
     // performed_by is a site email (site actions) or a Twitch login (EventSub).
     // Group by the RESOLVED twitch login so the same person logged under both an
@@ -187,7 +193,7 @@ analyticsRouter.get('/stats/moderators', async (req: Request, res: Response) => 
       FROM moderation_logs ml
       LEFT JOIN users u ON u.email = ml.performed_by
       LEFT JOIN twitch_user_meta tm ON tm.username = LOWER(COALESCE(u.twitch_username, ml.performed_by))
-      WHERE ml.performed_by NOT IN ('AUTO', 'console', 'bulk', 'dashboard') ${channelFilter}
+      WHERE ml.performed_by NOT IN ('AUTO', 'console', 'bulk', 'dashboard') ${channelFilter}${dateFilter}
       GROUP BY LOWER(COALESCE(u.twitch_username, ml.performed_by))
       ORDER BY total DESC
       LIMIT 50
@@ -207,6 +213,47 @@ analyticsRouter.get('/stats/moderators', async (req: Request, res: Response) => 
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'moderator stats failed' });
+  }
+});
+
+// Day (or range) summary — totals for a specific window.
+// ?from=<ISO>&to=<ISO>[&channel=<name>]  (from inclusive, to exclusive)
+analyticsRouter.get('/day-summary', async (req: Request, res: Response) => {
+  try {
+    const from = req.query.from as string;
+    const to = req.query.to as string;
+    const channel = req.query.channel as string | undefined;
+    if (!from || !to) return res.status(400).json({ error: 'from/to required' });
+
+    const mp: any[] = [from, to];
+    const chMsg = channel ? `AND channel_name = $${mp.push(channel)}` : '';
+    const ap: any[] = [from, to];
+    const chLog = channel ? `AND channel_name = $${ap.push(channel)}` : '';
+
+    const [msgs, acts] = await Promise.all([
+      db.query(`
+        SELECT COUNT(*)::int AS total,
+               COUNT(*) FILTER (WHERE spam_score >= 70)::int AS spam,
+               COUNT(DISTINCT username)::int AS chatters
+        FROM messages
+        WHERE created_at >= $1 AND created_at < $2 ${chMsg}
+      `, mp),
+      db.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE action IN ('MUTED','AUTO_MUTED'))::int AS mutes,
+          COUNT(*) FILTER (WHERE action='BANNED')::int AS bans,
+          COUNT(*) FILTER (WHERE action='UNBANNED')::int AS unbans,
+          COUNT(*) FILTER (WHERE action='FLAGGED')::int AS deletes,
+          COUNT(*)::int AS total_actions,
+          COUNT(DISTINCT performed_by) FILTER (WHERE performed_by NOT IN ('AUTO','console','bulk','dashboard'))::int AS active_mods
+        FROM moderation_logs
+        WHERE created_at >= $1 AND created_at < $2 ${chLog}
+      `, ap),
+    ]);
+
+    res.json({ messages: msgs.rows[0], actions: acts.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: 'day summary failed' });
   }
 });
 

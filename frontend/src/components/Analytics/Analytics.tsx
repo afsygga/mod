@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Radio, Calendar, Clock, Zap, ChevronDown, ChevronLeft, VolumeX, Ban, RotateCcw, Shield, Users, TrendingUp, X } from 'lucide-react';
+import { Radio, Calendar, Clock, Zap, ChevronDown, ChevronLeft, ChevronRight, VolumeX, Ban, RotateCcw, Shield, Users, TrendingUp, X, MessageSquare, AlertTriangle } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -14,6 +14,11 @@ interface TwitchMod {
   unbans: number;
   total: number;
   last_action: string | null;
+}
+
+interface DaySummary {
+  messages: { total: number; spam: number; chatters: number };
+  actions: { mutes: number; bans: number; unbans: number; deletes: number; total_actions: number; active_mods: number };
 }
 
 interface StreamSession {
@@ -86,6 +91,33 @@ function dur(sec: number) {
   if (!sec) return '—';
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
   return h > 0 ? `${h}ч ${m}м` : `${m}м`;
+}
+// MSK is a fixed UTC+3 (no DST). Convert a YYYY-MM-DD (interpreted as a Moscow
+// calendar day) into the UTC [from, to) window covering that whole day.
+function mskDayRange(dateStr: string): { from: string; to: string } {
+  const start = new Date(`${dateStr}T00:00:00+03:00`);
+  const end = new Date(start.getTime() + 86_400_000);
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+// Today's date as YYYY-MM-DD in Moscow time (for the date input default/max).
+function mskTodayStr(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  return parts; // en-CA formats as YYYY-MM-DD
+}
+// Shift a YYYY-MM-DD by ±N days, staying in the Moscow calendar.
+function shiftDayStr(dateStr: string, delta: number): string {
+  const d = new Date(`${dateStr}T12:00:00+03:00`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+}
+// Pretty DD.MM.YYYY for display.
+function ddmmyyyy(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-');
+  return `${d}.${m}.${y}`;
 }
 function timeAgo(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
@@ -1764,6 +1796,122 @@ function StreamCompare({ a, b, onBack }: { a: StreamSession; b: StreamSession; o
   );
 }
 
+// ─── day filter bar ─────────────────────────────────────────────────────────
+function DateFilterBar({ statDate, setStatDate }: { statDate: string; setStatDate: (v: string) => void }) {
+  const today = mskTodayStr();
+  const active = !!statDate;
+  const atToday = statDate === today;
+
+  const btn = (onClick: () => void, disabled: boolean, children: React.ReactNode, title: string) => (
+    <button onClick={onClick} disabled={disabled} title={title} style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      width: '30px', height: '30px', borderRadius: '8px', cursor: disabled ? 'default' : 'pointer',
+      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)',
+      color: disabled ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.55)', flexShrink: 0,
+    }}>{children}</button>
+  );
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '18px', flexWrap: 'wrap' }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.14em' }}>
+        <Calendar size={12} /> День
+      </span>
+
+      {btn(() => setStatDate(shiftDayStr(statDate || today, -1)), false, <ChevronLeft size={15} />, 'Предыдущий день')}
+
+      <input
+        type="date"
+        value={statDate}
+        max={today}
+        onChange={e => setStatDate(e.target.value)}
+        style={{
+          padding: '7px 12px', borderRadius: '9px', colorScheme: 'dark',
+          background: active ? 'rgba(160,112,255,0.14)' : 'rgba(255,255,255,0.05)',
+          border: `1px solid ${active ? 'rgba(160,112,255,0.4)' : 'rgba(255,255,255,0.1)'}`,
+          color: active ? '#c9a8ff' : 'rgba(255,255,255,0.7)',
+          fontSize: '13px', fontWeight: 600, outline: 'none', cursor: 'pointer',
+        }}
+      />
+
+      {btn(() => setStatDate(shiftDayStr(statDate || today, 1)), !active || atToday, <ChevronRight size={15} />, 'Следующий день')}
+
+      {active ? (
+        <button onClick={() => setStatDate('')} style={{
+          display: 'flex', alignItems: 'center', gap: '5px',
+          padding: '7px 12px', borderRadius: '9px', cursor: 'pointer',
+          background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)',
+          color: 'rgba(255,255,255,0.5)', fontSize: '11px', fontWeight: 600,
+        }}>
+          <X size={11} /> Всё время
+        </button>
+      ) : (
+        <button onClick={() => setStatDate(today)} style={{
+          padding: '7px 12px', borderRadius: '9px', cursor: 'pointer',
+          background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)',
+          color: 'rgba(255,255,255,0.5)', fontSize: '11px', fontWeight: 600,
+        }}>
+          Сегодня
+        </button>
+      )}
+
+      {active && (
+        <span style={{ marginLeft: 'auto', fontSize: '12px', color: 'rgba(201,168,255,0.85)', fontWeight: 600 }}>
+          {ddmmyyyy(statDate)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── day summary card ─────────────────────────────────────────────────────────
+function DaySummaryCard({ date, summary }: { date: string; summary: DaySummary | null }) {
+  const cells: Array<{ icon: any; label: string; value: number; color: string }> = summary ? [
+    { icon: MessageSquare, label: 'Сообщений', value: summary.messages.total, color: '#5b9eff' },
+    { icon: AlertTriangle, label: 'Спам', value: summary.messages.spam, color: '#ff9800' },
+    { icon: VolumeX, label: 'Мутов', value: summary.actions.mutes, color: '#ffc800' },
+    { icon: Ban, label: 'Банов', value: summary.actions.bans, color: '#ff5959' },
+    { icon: RotateCcw, label: 'Разбанов', value: summary.actions.unbans, color: '#00c878' },
+    { icon: Shield, label: 'Активных модер.', value: summary.actions.active_mods, color: '#a070ff' },
+  ] : [];
+
+  return (
+    <div style={{
+      background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+      borderRadius: '14px', padding: '16px 18px', marginBottom: '18px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+        <Calendar size={13} style={{ color: '#a070ff' }} />
+        <span style={{ fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.85)' }}>Сводка за {ddmmyyyy(date)}</span>
+        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>(МСК)</span>
+      </div>
+      {!summary ? (
+        <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', padding: '4px 0' }}>Загрузка...</div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '10px' }}>
+          {cells.map(c => {
+            const Icon = c.icon;
+            return (
+              <div key={c.label} style={{
+                padding: '12px 14px', borderRadius: '11px',
+                background: c.value > 0 ? `${c.color}12` : 'rgba(255,255,255,0.02)',
+                border: `1px solid ${c.value > 0 ? `${c.color}26` : 'rgba(255,255,255,0.05)'}`,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                  <Icon size={12} style={{ color: c.color }} />
+                  <span style={{ fontSize: '9px', fontWeight: 600, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{c.label}</span>
+                </div>
+                <div style={{ fontSize: '22px', fontWeight: 800, color: c.value > 0 ? c.color : 'rgba(255,255,255,0.3)', lineHeight: 1 }}>
+                  {c.value.toLocaleString()}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── main ─────────────────────────────────────────────────────────────────────
 export function Analytics({ initialSection, streamEventTick }: { initialSection?: 'mods' | 'streams'; streamEventTick?: number } = {}) {
   const [channels, setChannels] = useState<string[]>([]);
@@ -1779,6 +1927,9 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const [hourlyHeatmap, setHourlyHeatmap] = useState<{ dow: number; hour: number; c: number }[]>([]);
   const [hourCell, setHourCell] = useState<{ x: number; y: number; label: string } | null>(null);
   const [selectedMod, setSelectedMod] = useState<{ mod: TwitchMod; rank: number } | null>(null);
+  // Day filter — '' = all time, otherwise 'YYYY-MM-DD' (Moscow calendar day)
+  const [statDate, setStatDate] = useState('');
+  const [daySummary, setDaySummary] = useState<DaySummary | null>(null);
   const [heatmapTooltip, setHeatmapTooltip] = useState<HeatmapTooltip | null>(null);
   const [compareMode, setCompareMode] = useState(false);
   const [compareSel, setCompareSel] = useState<number[]>([]);
@@ -1819,8 +1970,9 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
     api.get<StreamSession[]>('/api/streams').then(setStreams).catch(() => {});
   }, [streamEventTick]);
 
-  const loadModsFromLogs = useCallback((ch: string) => {
-    api.get<any[]>(`/api/analytics/stats/moderators?channel=${encodeURIComponent(ch)}`)
+  const loadModsFromLogs = useCallback((ch: string, range?: { from: string; to: string }) => {
+    const rangeQs = range ? `&from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}` : '';
+    api.get<any[]>(`/api/analytics/stats/moderators?channel=${encodeURIComponent(ch)}${rangeQs}`)
       .then(data => {
         const converted: TwitchMod[] = (data || []).map((m: any) => ({
           twitch_login: m.twitch_username || m.twitch_display_name || m.display_name || '—',
@@ -1853,8 +2005,21 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   }, [loadModsFromLogs]);
 
   useEffect(() => {
-    if (selectedChannel) loadMods(selectedChannel);
-  }, [selectedChannel, loadMods]);
+    if (!selectedChannel) return;
+    if (statDate) {
+      // Day mode: leaderboard filtered to that Moscow day + a day summary card.
+      const range = mskDayRange(statDate);
+      setModsLoading(true);
+      setModsError(null);
+      loadModsFromLogs(selectedChannel, range);
+      setDaySummary(null);
+      api.get<DaySummary>(`/api/analytics/day-summary?channel=${encodeURIComponent(selectedChannel)}&from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`)
+        .then(setDaySummary).catch(() => setDaySummary(null));
+    } else {
+      setDaySummary(null);
+      loadMods(selectedChannel);
+    }
+  }, [selectedChannel, statDate, loadMods, loadModsFromLogs]);
 
   const handleHeatmapHover = useCallback(async (e: React.MouseEvent, date: Date, count: number) => {
     const key = date.toISOString().slice(0, 10);
@@ -1909,7 +2074,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                 </select>
                 <ChevronDown size={12} style={{ position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.4)', pointerEvents: 'none' }} />
               </div>
-              <button onClick={() => loadMods(selectedChannel)} style={{
+              <button onClick={() => {
+                if (statDate) loadModsFromLogs(selectedChannel, mskDayRange(statDate));
+                else loadMods(selectedChannel);
+              }} style={{
                 display: 'flex', alignItems: 'center', gap: '5px',
                 padding: '8px 12px', borderRadius: '9px', border: '1px solid rgba(255,255,255,0.07)',
                 background: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.4)',
@@ -1919,8 +2087,14 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
               </button>
             </div>
 
-            {/* Activity chart */}
-            {selectedChannel && <ModActivityChart channel={selectedChannel} />}
+            {/* Day filter bar */}
+            <DateFilterBar statDate={statDate} setStatDate={setStatDate} />
+
+            {/* Day summary (only when a day is selected) */}
+            {statDate && <DaySummaryCard date={statDate} summary={daySummary} />}
+
+            {/* Activity chart — hidden in day mode (it's a multi-day trend) */}
+            {selectedChannel && !statDate && <ModActivityChart channel={selectedChannel} />}
 
             {/* Table header */}
             {!modsLoading && mods.length > 0 && (
@@ -1942,7 +2116,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                 </div>
               ) : mods.length === 0 ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '13px' }}>
-                  Нет модераторов на этом канале
+                  {statDate ? `Нет действий модераторов ${ddmmyyyy(statDate)}` : 'Нет модераторов на этом канале'}
                 </div>
               ) : mods.map((m, i) => {
                 const isActive = m.total > 0;
