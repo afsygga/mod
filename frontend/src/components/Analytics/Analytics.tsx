@@ -1864,7 +1864,7 @@ function DateFilterBar({ statDate, setStatDate }: { statDate: string; setStatDat
 }
 
 // ─── day summary card ─────────────────────────────────────────────────────────
-function DaySummaryCard({ date, summary }: { date: string; summary: DaySummary | null }) {
+function DaySummaryCard({ date, summary, error }: { date: string; summary: DaySummary | null; error?: string | null }) {
   const cells: Array<{ icon: any; label: string; value: number; color: string }> = summary ? [
     { icon: MessageSquare, label: 'Сообщений', value: summary.messages.total, color: '#5b9eff' },
     { icon: AlertTriangle, label: 'Спам', value: summary.messages.spam, color: '#ff9800' },
@@ -1884,7 +1884,9 @@ function DaySummaryCard({ date, summary }: { date: string; summary: DaySummary |
         <span style={{ fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.85)' }}>Сводка за {ddmmyyyy(date)}</span>
         <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>(МСК)</span>
       </div>
-      {!summary ? (
+      {error ? (
+        <div style={{ color: '#ff9080', fontSize: '12px', padding: '4px 0' }}>{error}</div>
+      ) : !summary ? (
         <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', padding: '4px 0' }}>Загрузка...</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '10px' }}>
@@ -1930,6 +1932,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   // Day filter — '' = all time, otherwise 'YYYY-MM-DD' (Moscow calendar day)
   const [statDate, setStatDate] = useState('');
   const [daySummary, setDaySummary] = useState<DaySummary | null>(null);
+  const [daySummaryErr, setDaySummaryErr] = useState<string | null>(null);
   const [heatmapTooltip, setHeatmapTooltip] = useState<HeatmapTooltip | null>(null);
   const [compareMode, setCompareMode] = useState(false);
   const [compareSel, setCompareSel] = useState<number[]>([]);
@@ -2013,8 +2016,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
       setModsError(null);
       loadModsFromLogs(selectedChannel, range);
       setDaySummary(null);
+      setDaySummaryErr(null);
       api.get<DaySummary>(`/api/analytics/day-summary?channel=${encodeURIComponent(selectedChannel)}&from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`)
-        .then(setDaySummary).catch(() => setDaySummary(null));
+        .then(d => { setDaySummary(d); setDaySummaryErr(null); })
+        .catch((e: any) => setDaySummaryErr(e?.message === 'unauthorized' ? 'Требуется вход' : 'Эндпоинт недоступен — обнови бэкенд'));
     } else {
       setDaySummary(null);
       loadMods(selectedChannel);
@@ -2091,7 +2096,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
             <DateFilterBar statDate={statDate} setStatDate={setStatDate} />
 
             {/* Day summary (only when a day is selected) */}
-            {statDate && <DaySummaryCard date={statDate} summary={daySummary} />}
+            {statDate && <DaySummaryCard date={statDate} summary={daySummary} error={daySummaryErr} />}
 
             {/* Activity chart — hidden in day mode (it's a multi-day trend) */}
             {selectedChannel && !statDate && <ModActivityChart channel={selectedChannel} />}
@@ -2113,6 +2118,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
               {modsLoading ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '13px' }}>
                   Загрузка модераторов с Twitch...
+                </div>
+              ) : modsError ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: '#ff9080', fontSize: '13px' }}>
+                  {modsError}
                 </div>
               ) : mods.length === 0 ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '13px' }}>
