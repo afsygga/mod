@@ -623,26 +623,55 @@ export class TwitchManager {
       }
       if (!broadcasterId) return 'Не удалось найти broadcaster_id';
 
-      // Changing the category REQUIRES the broadcaster's own token
-      // (channel:manage:broadcast) — a moderator token can't do it.
+      // Changing the category REQUIRES the broadcaster's OWN token with
+      // channel:manage:broadcast (a moderator token can't do it). Two sources,
+      // in priority:
+      //   1. broadcaster_tokens — the dedicated /broadcaster-connect flow.
+      //   2. the streamer's normal site login token — the main Twitch login
+      //      already requests channel:manage:broadcast, and the broadcaster's
+      //      twitch_username IS the channel name, so a streamer who signed in
+      //      via Twitch ONCE can change category with NO second authorization.
+      let patchToken: string | null = null;
+      let refreshPatchToken: () => Promise<string | null> = async () => null;
+
       const { rows: btRows } = await db.query(
         'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channelName]
       );
-      if (!btRows[0]?.access_token) {
-        return `Категория не изменена: требуется авторизация стримера на сайте`;
+      if (btRows[0]?.access_token) {
+        patchToken = btRows[0].access_token;
+        refreshPatchToken = () => refreshBroadcasterToken(channelName);
+      } else {
+        // Fall back to the broadcaster's own site-login token.
+        const { rows: ur } = await db.query(
+          'SELECT email, twitch_oauth FROM users WHERE LOWER(twitch_username)=LOWER($1)', [channelName]
+        );
+        if (ur[0]?.twitch_oauth) {
+          patchToken = String(ur[0].twitch_oauth).replace(/^oauth:/, '');
+          const brEmail = ur[0].email as string;
+          refreshPatchToken = () => refreshUserToken(brEmail);
+        }
       }
-      let patchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${btRows[0].access_token}`, 'Content-Type': 'application/json' };
+
+      if (!patchToken) {
+        return `Категория не изменена: стримеру нужно войти на сайте через Twitch`;
+      }
+      let patchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${patchToken}`, 'Content-Type': 'application/json' };
       let patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
         method: 'PATCH', headers: patchHeaders, body: JSON.stringify({ game_id: game.id }),
       });
       if (patchRes.status === 401) {
-        const fresh = await refreshBroadcasterToken(channelName);
+        const fresh = await refreshPatchToken();
         if (fresh) {
           patchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${fresh}`, 'Content-Type': 'application/json' };
           patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
             method: 'PATCH', headers: patchHeaders, body: JSON.stringify({ game_id: game.id }),
           });
         }
+      }
+      // A 403 means the token lacks channel:manage:broadcast (e.g. a broadcaster
+      // who authorized before that scope existed) — tell them to re-login.
+      if (patchRes.status === 403) {
+        return `Категория не изменена: перезайди на сайте через Twitch (нужны новые права)`;
       }
       if (!patchRes.ok) {
         const err: any = await patchRes.json().catch(() => ({}));
