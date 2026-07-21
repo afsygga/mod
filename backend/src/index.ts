@@ -1,10 +1,13 @@
 import 'dotenv/config';
+import { recordUnhandled } from './utils/metrics';
 
 // Prevent unhandled rejections from crashing the process
 process.on('unhandledRejection', (reason) => {
+  recordUnhandled();
   console.error('[unhandledRejection]', reason);
 });
 process.on('uncaughtException', (err) => {
+  recordUnhandled();
   console.error('[uncaughtException]', err);
 });
 import express from 'express';
@@ -36,6 +39,7 @@ import { logger } from './utils/logger';
 const app = express();
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer });
+(global as any).wss = wss; // for the health/metrics endpoint (clients count)
 
 app.use(cors({
   origin: process.env.CORS_ORIGIN?.split(',') || '*',

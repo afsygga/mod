@@ -1548,8 +1548,34 @@ interface HealthData {
     broadcasters: { id: string; status: string; last_validated: string | null }[];
   };
   recent_issues: { level: string; message: string; ts: number }[];
+  metrics?: HealthMetrics;
   ts: number;
 }
+
+interface JobM { success: number; partial: number; error: number; lastSuccessTs: number; lastCompletionTs: number; lastDurationMs: number; inProgress: boolean; }
+interface HealthMetrics {
+  uptime_sec: number; memory_rss: number; memory_heap_used: number;
+  chat: { received: number; accepted: number; processingErrors: number; lastMessageTs: number };
+  chat_dropped: Record<string, number>;
+  spam_decisions: Record<string, number>;
+  moderation: Record<string, number>;
+  automod: Record<string, number>;
+  token_refresh: Record<string, number>;
+  irc_reconnects: Record<string, number>;
+  eventsub: { required_moderate: number; active_moderate: number; required_stream: number; active_stream: number; reconnects: Record<string, number>; revocations: number };
+  jobs: Record<string, JobM>;
+  db_pool: { total: number; idle: number; active: number; waiting: number };
+  db_pool_errors: number;
+  ws: { broadcastAttempts: number; sendErrors: number; opened: number; closed: number; clients: number };
+  process_unhandled_errors: number;
+}
+
+const fmtBytes = (b: number) => b > 1e9 ? `${(b / 1e9).toFixed(1)} ГБ` : `${Math.round(b / 1e6)} МБ`;
+const fmtUptime = (s: number) => {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d > 0 ? `${d}д ${h}ч` : h > 0 ? `${h}ч ${m}м` : `${m}м`;
+};
+const sumVals = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
 
 function Dot({ ok, warn }: { ok: boolean; warn?: boolean }) {
   const color = ok ? '#00c878' : warn ? '#ffc800' : '#ff5959';
@@ -1688,6 +1714,110 @@ function HealthTab() {
         ))}
       </div>
 
+      {/* ── Operational metrics ── */}
+      {data.metrics && (() => {
+        const m = data.metrics;
+        const lastMsgAge = m.chat.lastMessageTs ? relativeTime(new Date(m.chat.lastMessageTs).toISOString()) : '—';
+        const jobLabels: Record<string, string> = { stream_poller: 'Стрим-поллер', token_validator: 'Валидатор токенов', eventsub_reconcile: 'EventSub reconcile' };
+        return (
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', margin: '4px 2px 10px' }}>Метрики</div>
+
+            {/* quick stats */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))', gap: '10px', marginBottom: '12px' }}>
+              <MiniStat label="Аптайм" value={fmtUptime(m.uptime_sec)} />
+              <MiniStat label="Память (RSS)" value={fmtBytes(m.memory_rss)} />
+              <MiniStat label="WS клиенты" value={m.ws.clients} />
+              <MiniStat label="DB pool (active/wait)" value={`${m.db_pool.active}/${m.db_pool.waiting}`} warn={m.db_pool.waiting > 0} />
+              <MiniStat label="Необр. ошибки" value={m.process_unhandled_errors} warn={m.process_unhandled_errors > 0} />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px,1fr))', gap: '12px' }}>
+              {/* Ingestion */}
+              <div style={metricCard}>
+                <div style={metricTitle}><Radio size={13} style={{ color: '#00c878' }} /> Приём чата</div>
+                <MetricLine label="Получено (IRC callbacks)" value={m.chat.received.toLocaleString()} />
+                <MetricLine label="Принято (после routing/dedup)" value={m.chat.accepted.toLocaleString()} />
+                <MetricLine label="Последнее сообщение" value={lastMsgAge} />
+                <MetricLine label="Ошибки обработки" value={m.chat.processingErrors} warn={m.chat.processingErrors > 0} />
+                {sumVals(m.chat_dropped) > 0 && <ChipRow data={m.chat_dropped} />}
+              </div>
+
+              {/* Spam decisions */}
+              <div style={metricCard}>
+                <div style={metricTitle}><Shield size={13} style={{ color: '#a070ff' }} /> Решения спам-движка</div>
+                <Bars data={m.spam_decisions} colors={{ clean: '#00c878', queued: '#ffc800', automod: '#ff5959', whitelist_suppressed: '#00e5cc', role_ignored: 'rgba(255,255,255,0.4)' }} />
+              </div>
+
+              {/* Moderation */}
+              <div style={metricCard}>
+                <div style={metricTitle}><VolumeX size={13} style={{ color: '#ffc800' }} /> Модерация (Twitch-результат)</div>
+                {sumVals(m.moderation) === 0 && sumVals(m.automod) === 0 ? (
+                  <div style={metricEmpty}>Пока нет действий</div>
+                ) : (
+                  <>
+                    <ChipRow data={m.moderation} />
+                    {sumVals(m.automod) > 0 && <>
+                      <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', margin: '8px 0 4px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Автомод</div>
+                      <ChipRow data={m.automod} />
+                    </>}
+                  </>
+                )}
+              </div>
+
+              {/* Tokens */}
+              <div style={metricCard}>
+                <div style={metricTitle}><KeyRound size={13} style={{ color: '#00e5cc' }} /> Рефреш токенов</div>
+                {sumVals(m.token_refresh) === 0 ? <div style={metricEmpty}>Пока нет рефрешей</div> : <ChipRow data={m.token_refresh} />}
+              </div>
+
+              {/* EventSub coverage */}
+              <div style={metricCard}>
+                <div style={metricTitle}><ShieldCheck size={13} style={{ color: '#00c878' }} /> EventSub покрытие</div>
+                <MetricLine label="channel.moderate (актив/нужно)" value={`${m.eventsub.active_moderate}/${m.eventsub.required_moderate}`} warn={m.eventsub.active_moderate < m.eventsub.required_moderate} />
+                <MetricLine label="stream (актив/нужно)" value={`${m.eventsub.active_stream}/${m.eventsub.required_stream}`} warn={m.eventsub.active_stream < m.eventsub.required_stream} />
+                <MetricLine label="Отзывы подписок" value={m.eventsub.revocations} warn={m.eventsub.revocations > 0} />
+                {sumVals(m.eventsub.reconnects) > 0 && <ChipRow data={m.eventsub.reconnects} />}
+              </div>
+
+              {/* WebSocket */}
+              <div style={metricCard}>
+                <div style={metricTitle}><Wifi size={13} style={{ color: '#5b9eff' }} /> WebSocket</div>
+                <MetricLine label="Клиентов сейчас" value={m.ws.clients} />
+                <MetricLine label="Broadcast-отправок" value={m.ws.broadcastAttempts.toLocaleString()} />
+                <MetricLine label="Ошибок отправки" value={m.ws.sendErrors} warn={m.ws.sendErrors > 0} />
+                <MetricLine label="Открыто/закрыто" value={`${m.ws.opened}/${m.ws.closed}`} />
+              </div>
+            </div>
+
+            {/* Background jobs */}
+            <div style={{ ...metricCard, marginTop: '12px' }}>
+              <div style={metricTitle}><RotateCcw size={13} style={{ color: '#ffc800' }} /> Фоновые задачи</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))', gap: '10px', marginTop: '4px' }}>
+                {['stream_poller', 'token_validator', 'eventsub_reconcile'].map(jn => {
+                  const j = m.jobs[jn];
+                  const age = j?.lastSuccessTs ? relativeTime(new Date(j.lastSuccessTs).toISOString()) : 'никогда';
+                  const stale = !j?.lastSuccessTs;
+                  return (
+                    <div key={jn} style={{ padding: '10px 12px', borderRadius: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '6px' }}>
+                        <Dot ok={!!j?.lastSuccessTs && !j?.error} warn={stale} />
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{jobLabels[jn] || jn}</span>
+                        {j?.inProgress && <span style={{ marginLeft: 'auto', fontSize: '9px', color: '#ffc800' }}>идёт…</span>}
+                      </div>
+                      <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <span>Успех: <b style={{ color: 'rgba(255,255,255,0.75)' }}>{age}</b></span>
+                        <span>Длит.: {j ? `${j.lastDurationMs} мс` : '—'} · OK {j?.success ?? 0} · err <b style={{ color: (j?.error ?? 0) > 0 ? '#ff7070' : 'inherit' }}>{j?.error ?? 0}</b></span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Recent issues */}
       <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '16px 18px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
@@ -1735,6 +1865,70 @@ function HealthCard({ icon: Icon, title, ok, warn, lines }: {
           <span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.8)' }}>{l.text}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+const metricCard: React.CSSProperties = { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '14px 16px' };
+const metricTitle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: '7px', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: '10px' };
+const metricEmpty: React.CSSProperties = { fontSize: '11px', color: 'rgba(255,255,255,0.3)' };
+
+function MiniStat({ label, value, warn }: { label: string; value: any; warn?: boolean }) {
+  return (
+    <div style={{ padding: '11px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+      <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginBottom: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+      <div style={{ fontSize: '18px', fontWeight: 800, color: warn ? '#ff7070' : 'rgba(255,255,255,0.9)', lineHeight: 1 }}>{value}</div>
+    </div>
+  );
+}
+
+function MetricLine({ label, value, warn }: { label: string; value: any; warn?: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '11px' }}>
+      <span style={{ color: 'rgba(255,255,255,0.5)', flex: 1 }}>{label}</span>
+      <span style={{ fontWeight: 700, color: warn ? '#ff7070' : 'rgba(255,255,255,0.85)' }}>{value}</span>
+    </div>
+  );
+}
+
+function ChipRow({ data }: { data: Record<string, number> }) {
+  const entries = Object.entries(data).filter(([, v]) => v > 0);
+  if (entries.length === 0) return <div style={metricEmpty}>—</div>;
+  const color = (k: string) => /error|invalid|conflict|malformed|auth_error/.test(k) ? '#ff7070'
+    : /success/.test(k) ? '#00c878' : 'rgba(255,255,255,0.7)';
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '4px' }}>
+      {entries.map(([k, v]) => (
+        <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 8px', borderRadius: '999px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', fontSize: '10px' }}>
+          <span style={{ color: 'rgba(255,255,255,0.5)' }}>{k}</span>
+          <b style={{ color: color(k) }}>{v}</b>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function Bars({ data, colors }: { data: Record<string, number>; colors: Record<string, string> }) {
+  const entries = Object.entries(data);
+  const total = entries.reduce((a, [, v]) => a + v, 0);
+  if (total === 0) return <div style={metricEmpty}>Пока нет сообщений</div>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      {entries.filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+        const pct = Math.round((v / total) * 100);
+        const c = colors[k] || 'rgba(255,255,255,0.5)';
+        return (
+          <div key={k}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', marginBottom: '2px' }}>
+              <span style={{ color: 'rgba(255,255,255,0.6)' }}>{k}</span>
+              <span style={{ color: c, fontWeight: 700 }}>{v.toLocaleString()} · {pct}%</span>
+            </div>
+            <div style={{ height: '4px', borderRadius: '3px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${pct}%`, background: c, borderRadius: '3px' }} />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

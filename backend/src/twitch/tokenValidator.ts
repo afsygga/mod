@@ -1,6 +1,7 @@
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
 import { refreshUserToken, refreshBroadcasterToken, validateAccessToken } from './twitchToken';
+import { jobStart, jobEnd } from '../utils/metrics';
 
 /**
  * Hourly OAuth session validator (BUG-12). Twitch requires third-party apps to
@@ -64,7 +65,11 @@ let started = false;
 export function startTokenValidator(): void {
   if (started) return;
   started = true;
-  const run = () => validateAll().catch(err => logger.error('[validator] sweep failed', err));
+  const run = async () => {
+    const startedAt = jobStart('token_validator');
+    try { await validateAll(); jobEnd('token_validator', 'success', startedAt); }
+    catch (err) { logger.error('[validator] sweep failed', err); jobEnd('token_validator', 'error', startedAt); }
+  };
   // Startup validation (delayed past migrations/connection restore), then hourly.
   setTimeout(run, STARTUP_DELAY_MS);
   setInterval(run, INTERVAL_MS);

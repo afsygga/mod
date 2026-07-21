@@ -7,6 +7,11 @@ import { logger } from '../utils/logger';
 import { TelegramBot } from '../telegram/TelegramBot';
 import { refreshUserToken, refreshBroadcasterToken, getAppToken, validateAccessToken } from './twitchToken';
 import { logModerationAction } from '../utils/modLog';
+import {
+  recordChatReceived, recordChatAccepted, recordChatDropped, recordChatError,
+  recordSpamDecision, recordModeration, recordAutomod, recordIrcReconnect,
+  jobStart, jobEnd,
+} from '../utils/metrics';
 
 interface UserConnection {
   email: string;
@@ -36,6 +41,7 @@ export class TwitchManager {
   private globalSettings = { ...defaultSettings };
   // Fallback global bot from env (legacy mode)
   private globalClient: tmi.Client | null = null;
+  private globalWasDisconnected = false; // for reconnect-vs-initial-connect metric
   // Guards the refresh-and-reconnect loop for user IRC auth failures
   private lastAuthReconnect: Map<string, number> = new Map();
 
@@ -60,17 +66,20 @@ export class TwitchManager {
     this.globalClient.on('message', (ch, us, msg, self) => this.handleMessage(null, ch, us, msg, self));
     this.globalClient.on('connected', () => {
       logger.info('Global Twitch IRC connected');
+      if (this.globalWasDisconnected) { recordIrcReconnect('success'); this.globalWasDisconnected = false; }
       // The client was created with an empty channel list and joins dynamically,
       // so after a reconnect nothing is covered unless we explicitly rejoin.
       this.rejoinGlobalChannels().catch(err => logger.error('Global rejoin failed', err));
     });
     this.globalClient.on('disconnected', (reason) => {
+      this.globalWasDisconnected = true;
       // tmi.js permanently disables its own reconnect on auth failures, so an
       // expired TWITCH_BOT_OAUTH kills the global bot for good. It's a static
       // env token with no refresh_token — we can't heal it here; log loudly so
       // it's obvious the env token must be regenerated. Per-user connections
       // (refreshable) keep ingestion alive in the meantime.
       if (/login|authentication|auth/i.test(reason || '')) {
+        recordIrcReconnect('auth_error');
         logger.error(`Global IRC auth failed (${reason}) — TWITCH_BOT_OAUTH is expired/invalid and must be regenerated. Falling back to per-user connections.`);
       } else {
         logger.warn(`Global IRC disconnected: ${reason}`);
@@ -211,13 +220,14 @@ export class TwitchManager {
   private seenMsgIds = new Set<string>();
 
   private async handleMessage(ownerEmail: string | null, channelRaw: string, userstate: tmi.ChatUserstate, message: string, self: boolean) {
-    if (self) return;
+    recordChatReceived();
+    if (self) { recordChatDropped('self'); return; }
     const channelName = channelRaw.replace('#', '');
     const username = userstate['display-name'] || userstate.username || 'unknown';
     const role = this.getRole(userstate);
 
     const state = this.channels.get(channelName);
-    if (!state) return;
+    if (!state) { recordChatDropped('unknown_channel'); return; }
 
     // Routing — the primary IRC connection processes messages while it's alive;
     // if it's down, accept the global bot's copy so detection never goes blind.
@@ -226,26 +236,29 @@ export class TwitchManager {
       const primaryConn = this.connections.get(state.primaryEmail);
       const primaryAlive = !!primaryConn?.connected && primaryConn.joinedChannels.has(channelName);
       if (primaryAlive) {
-        if (ownerEmail !== state.primaryEmail) return;
+        if (ownerEmail !== state.primaryEmail) { recordChatDropped('non_primary'); return; }
       } else {
         // Primary dead — accept global (null) or the primary itself if it races back
-        if (ownerEmail !== null && ownerEmail !== state.primaryEmail) return;
+        if (ownerEmail !== null && ownerEmail !== state.primaryEmail) { recordChatDropped('non_primary'); return; }
       }
     } else {
-      if (ownerEmail !== null) return;
+      if (ownerEmail !== null) { recordChatDropped('non_primary'); return; }
     }
 
     // Hard dedupe by Twitch message id — protects against any duplicate source
     // (stale client that survived a reconnect, double listeners, etc.)
     const msgId = (userstate as any).id as string | undefined;
     if (msgId) {
-      if (this.seenMsgIds.has(msgId)) return;
+      if (this.seenMsgIds.has(msgId)) { recordChatDropped('duplicate'); return; }
       this.seenMsgIds.add(msgId);
       if (this.seenMsgIds.size > 5000) {
         const it = this.seenMsgIds.values();
         for (let i = 0; i < 1000; i++) this.seenMsgIds.delete(it.next().value as string);
       }
     }
+
+    // Passed routing + dedup — ingestion for this channel is alive.
+    recordChatAccepted();
 
     // !g <game name> — set game/category (only for broadcaster or mods with OAuth)
     const GAME_ALIASES: Record<string, string> = {
@@ -255,6 +268,7 @@ export class TwitchManager {
     };
     const alias = GAME_ALIASES[message.trim().toLowerCase()];
     if (alias && (userstate.mod || userstate.badges?.broadcaster)) {
+      recordChatDropped('command');
       const cachedForCmd = await this.getCachedSettings();
       if (!cachedForCmd.setGameEnabled) return;
       this.setGame(channelName, alias, state.primaryEmail).then(reply => {
@@ -264,6 +278,7 @@ export class TwitchManager {
     }
 
     if (message.trim().startsWith('!g ') && (userstate.mod || userstate.badges?.broadcaster)) {
+      recordChatDropped('command');
       const cachedForCmd = await this.getCachedSettings();
       if (!cachedForCmd.setGameEnabled) return;
       const gameName = message.trim().slice(3).trim();
@@ -275,7 +290,14 @@ export class TwitchManager {
       return;
     }
 
-    const analysis = state.engine.analyze(username, message);
+    let analysis;
+    try {
+      analysis = state.engine.analyze(username, message);
+    } catch (err: any) {
+      recordChatError();
+      logger.error(`spam analyze error: ${err?.message || err}`);
+      return;
+    }
 
     // UI first, persistence last: broadcasts must never wait on the DB pool —
     // during a flood queued INSERTs delayed detection in the dashboard by seconds.
@@ -289,6 +311,18 @@ export class TwitchManager {
 
     const threshold = state.engine.settings.detectThreshold;
     const autoMuteThreshold = state.engine.settings.autoMuteThreshold;
+
+    // Exactly one terminal spam decision per analyzed message.
+    const isSpam = analysis.score >= threshold;
+    const willAutomod = isSpam && analysis.score >= autoMuteThreshold && !analysis.whitelistedFlood
+      && cachedSettings.autoMode && state.autoMod !== false && !roleIgnored;
+    recordSpamDecision(
+      isSpam && roleIgnored ? 'role_ignored'
+      : analysis.whitelistedFlood ? 'whitelist_suppressed'
+      : willAutomod ? 'automod'
+      : isSpam ? 'queued'
+      : 'clean'
+    );
 
     if (analysis.score >= threshold && !roleIgnored) {
       broadcast(this.wss, {
@@ -728,13 +762,14 @@ export class TwitchManager {
     return out;
   }
 
-  async syncStreams(): Promise<{ started: string[]; ended: string[]; live: number }> {
+  async syncStreams(): Promise<{ started: string[]; ended: string[]; live: number; ok: boolean }> {
     // Poll every channel in the DB (not just IRC-joined ones) so tracking works
-    // even if the bot's IRC connection is down.
+    // even if the bot's IRC connection is down. `ok` = a trustworthy live state
+    // was obtained from Helix (a total Helix failure is NOT a successful live=0).
     const { rows: chRows } = await db.query('SELECT name FROM channels');
     const dbChannels = chRows.map((r: any) => r.name.toLowerCase());
     const channelNames = [...new Set([...dbChannels, ...this.getChannelNames().map(c => c.toLowerCase())])];
-    if (channelNames.length === 0) return { started: [], ended: [], live: 0 };
+    if (channelNames.length === 0) return { started: [], ended: [], live: 0, ok: true };
 
     // Channels that currently have an open session (before this sync)
     const { rows: openBefore } = await db.query(
@@ -767,7 +802,7 @@ export class TwitchManager {
       for (const r of emails) await refreshUserToken(r.email);
       ({ live: liveStreams, err: lastErr } = await tryFetch());
     }
-    if (liveStreams === null) { logger.warn(`[streams] all Helix tokens failed: ${lastErr}`); return { started: [], ended: [], live: 0 }; }
+    if (liveStreams === null) { logger.warn(`[streams] all Helix tokens failed: ${lastErr}`); return { started: [], ended: [], live: 0, ok: false }; }
 
     const liveChannels = new Set<string>(liveStreams.map((s: any) => s.user_login.toLowerCase()));
 
@@ -803,7 +838,7 @@ export class TwitchManager {
     const started = [...liveChannels].filter(ch => !openBeforeSet.has(ch));
     const ended = [...openBeforeSet].filter(ch => !liveChannels.has(ch));
     logger.info(`[streams] sync: channels=${channelNames.length} [${channelNames.join(',')}] live=${liveStreams.length} [${[...liveChannels].join(',')}]`);
-    return { started, ended, live: liveStreams.length };
+    return { started, ended, live: liveStreams.length, ok: true };
   }
 
   /**
@@ -815,13 +850,17 @@ export class TwitchManager {
     if (this.streamPollerTimer) return;
     logger.info('[streams] poller started');
     const tick = async () => {
+      const startedAt = jobStart('stream_poller');
+      let result: 'success' | 'error' = 'error';
       try {
-        const { started, ended } = await this.syncStreams();
-        for (const ch of started) broadcast(this.wss, { type: 'stream_start', channel: ch, ts: Date.now() });
-        for (const ch of ended) broadcast(this.wss, { type: 'stream_end', channel: ch, ts: Date.now() });
+        const r = await this.syncStreams();
+        result = r.ok ? 'success' : 'error';
+        for (const ch of r.started) broadcast(this.wss, { type: 'stream_start', channel: ch, ts: Date.now() });
+        for (const ch of r.ended) broadcast(this.wss, { type: 'stream_end', channel: ch, ts: Date.now() });
       } catch (err) {
         logger.error('stream poll error', err);
       } finally {
+        jobEnd('stream_poller', result, startedAt);
         this.streamPollerTimer = setTimeout(tick, intervalMs);
       }
     };
@@ -1061,14 +1100,17 @@ export class TwitchManager {
       } catch {}
     }
 
+    let twitchResult: 'success' | 'fallback_success' | 'error' = 'error';
     try {
       const ok = await this.execHelixBan(channelLower, userLower, actorEmail, { duration: durationSeconds, reason });
       if (ok) {
+        twitchResult = 'success';
         logger.info(`Timed out ${username} in ${channelName} for ${durationSeconds}s`);
       } else {
         // Fallback: retry with channel primary, then global bot — the mute must land
         for (const fb of this.actorFallbacks(channelName, actorEmail)) {
           if (await this.execHelixBan(channelLower, userLower, fb, { duration: durationSeconds, reason })) {
+            twitchResult = 'fallback_success';
             logger.warn(`Mute for ${username} in ${channelName} executed via fallback actor=${fb ?? 'global'} (requested by ${performedBy})`);
             break;
           }
@@ -1077,6 +1119,8 @@ export class TwitchManager {
     } catch (err: any) {
       logger.error(`muteUser error: ${err?.message}`);
     }
+    // Automod origin is inferred from the AUTO actor for this UI metric.
+    (performedBy === 'AUTO' ? recordAutomod : recordModeration)('timeout', twitchResult);
 
     // Only the primary (first) mute of an incident bumps the user's mute_count
     // and broadcasts; pile-on mutes within 5s are logged as secondary (counted
@@ -1108,13 +1152,16 @@ export class TwitchManager {
       } catch {}
     }
 
+    let twitchResult: 'success' | 'fallback_success' | 'error' = 'error';
     try {
       const ok = await this.execHelixBan(channelLower, userLower, actorEmail, { reason });
       if (ok) {
+        twitchResult = 'success';
         logger.info(`Banned ${username} in ${channelName}`);
       } else {
         for (const fb of this.actorFallbacks(channelName, actorEmail)) {
           if (await this.execHelixBan(channelLower, userLower, fb, { reason })) {
+            twitchResult = 'fallback_success';
             logger.warn(`Ban for ${username} in ${channelName} executed via fallback actor=${fb ?? 'global'} (requested by ${performedBy})`);
             break;
           }
@@ -1123,6 +1170,7 @@ export class TwitchManager {
     } catch (err: any) {
       logger.error(`banUser error: ${err?.message}`);
     }
+    recordModeration('ban', twitchResult);
 
     const r = await logModerationAction({
       channel: channelName, username, action: 'BANNED', performedBy,
@@ -1134,6 +1182,7 @@ export class TwitchManager {
     const channelLower = channelName.toLowerCase();
     const userLower = username.toLowerCase();
     const actorEmail = await this.resolveActorEmail(channelName, performedBy);
+    let twitchResult: 'success' | 'error' = 'error';
     try {
       const ids = await this.getUserIds([channelLower, userLower], actorEmail);
       const broadcasterId = ids[channelLower];
@@ -1145,11 +1194,13 @@ export class TwitchManager {
           `https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${broadcasterId}&moderator_id=${moderatorId}&user_id=${targetId}`,
           { method: 'DELETE', headers }
         );
-        if (!res.ok) logger.error(`Helix unban failed ${res.status}: ${await res.text()}`);
+        if (res.ok) twitchResult = 'success';
+        else logger.error(`Helix unban failed ${res.status}: ${await res.text()}`);
       }
     } catch (err: any) {
       logger.error(`unbanUser error: ${err?.message}`);
     }
+    recordModeration('unban', twitchResult);
     await logModerationAction({ channel: channelName, username, action: 'UNBANNED', performedBy });
   }
 

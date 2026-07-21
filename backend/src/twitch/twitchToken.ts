@@ -1,5 +1,6 @@
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
+import { recordTokenRefresh } from '../utils/metrics';
 
 /**
  * Twitch user access tokens expire (~4h). We store the refresh_token and use it
@@ -32,7 +33,7 @@ const REFRESH_COOLDOWN_MS = 60_000;
 
 type RefreshResult =
   | { ok: true; access: string; refresh: string }
-  | { ok: false; kind: 'invalid' | 'temporary' };
+  | { ok: false; kind: 'invalid' | 'temporary' | 'malformed' };
 
 /** Validate a raw access token, distinguishing invalid from transient errors. */
 export async function validateAccessToken(rawToken: string): Promise<'valid' | 'invalid_401' | 'temporary'> {
@@ -74,7 +75,7 @@ async function doRefresh(refreshToken: string): Promise<RefreshResult> {
     if (!d || typeof d.access_token !== 'string' || d.access_token.length === 0 ||
         typeof d.refresh_token !== 'string' || d.refresh_token.length === 0) {
       logger.error('[token] refresh response malformed (missing/empty tokens)');
-      return { ok: false, kind: 'temporary' };
+      return { ok: false, kind: 'malformed' };
     }
     return { ok: true, access: d.access_token, refresh: d.refresh_token };
   } catch (err: any) {
@@ -121,6 +122,9 @@ export async function refreshUserToken(email: string | null): Promise<string | n
           "UPDATE users SET twitch_auth_status='reauthorization_required' WHERE email=$1", [email]
         ).catch(() => {});
         logger.warn(`[token] user ${email}: refresh token invalid — reauthorization required`);
+        recordTokenRefresh('user', 'invalid_grant');
+      } else {
+        recordTokenRefresh('user', r.kind === 'malformed' ? 'malformed_response' : 'temporary_error');
       }
       return null; // temporary: no cooldown, caller may retry later
     }
@@ -139,13 +143,16 @@ export async function refreshUserToken(email: string | null): Promise<string | n
       rowCount = upd.rowCount;
     } catch (e: any) {
       logger.error(`[token] user ${email}: refresh persist FAILED (${e?.message || e}) — discarding new token`);
+      recordTokenRefresh('user', 'db_error');
       return null;
     }
     if (rowCount !== 1) {
       logger.warn(`[token] user ${email}: credentials changed concurrently (rowCount=${rowCount}) — discarding stale refresh result`);
+      recordTokenRefresh('user', 'cas_conflict');
       return null;
     }
     lastRefreshAt.set(key, Date.now());
+    recordTokenRefresh('user', 'success');
     logger.info(`[token] refreshed user token for ${email}`);
     return r.access;
   });
@@ -174,6 +181,9 @@ export async function refreshBroadcasterToken(login: string): Promise<string | n
           "UPDATE broadcaster_tokens SET auth_status='reauthorization_required' WHERE twitch_login=$1", [login]
         ).catch(() => {});
         logger.warn(`[token] broadcaster ${login}: refresh token invalid — reauthorization required`);
+        recordTokenRefresh('broadcaster', 'invalid_grant');
+      } else {
+        recordTokenRefresh('broadcaster', r.kind === 'malformed' ? 'malformed_response' : 'temporary_error');
       }
       return null;
     }
@@ -189,13 +199,16 @@ export async function refreshBroadcasterToken(login: string): Promise<string | n
       rowCount = upd.rowCount;
     } catch (e: any) {
       logger.error(`[token] broadcaster ${login}: refresh persist FAILED (${e?.message || e}) — discarding new token`);
+      recordTokenRefresh('broadcaster', 'db_error');
       return null;
     }
     if (rowCount !== 1) {
       logger.warn(`[token] broadcaster ${login}: credentials changed concurrently (rowCount=${rowCount}) — discarding stale refresh result`);
+      recordTokenRefresh('broadcaster', 'cas_conflict');
       return null;
     }
     lastRefreshAt.set(key, Date.now());
+    recordTokenRefresh('broadcaster', 'success');
     logger.info(`[token] refreshed broadcaster token for ${login}`);
     return r.access;
   });

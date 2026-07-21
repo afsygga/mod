@@ -5,6 +5,7 @@ import { broadcast } from '../websocket/wsHandler';
 import { logger } from '../utils/logger';
 import { refreshUserToken } from './twitchToken';
 import { logModerationAction } from '../utils/modLog';
+import { recordEventsubReconnect, recordEventsubRevocation, jobStart, jobEnd } from '../utils/metrics';
 
 const EVENTSUB_URL = 'wss://eventsub.wss.twitch.tv/ws';
 const WELCOME_TIMEOUT_MS = 15_000;
@@ -112,6 +113,7 @@ export class EventSubManager {
       const limitMs = Math.max(conn.keepaliveSec, 10) * 2_500 + 5_000;
       if (now - conn.lastMsgAt > limitMs) {
         logger.warn(`[eventsub] ${conn.login}: silent for ${now - conn.lastMsgAt}ms — terminating stale socket`);
+        recordEventsubReconnect('watchdog');
         conn.sessionId = null;
         try { conn.ws.terminate(); } catch {}
       }
@@ -127,6 +129,7 @@ export class EventSubManager {
       ws = new WebSocket(url);
     } catch (err) {
       logger.error(`[eventsub] ${conn.login}: connect threw`, err);
+      recordEventsubReconnect('connect_error');
       this.scheduleReconnect(conn);
       return;
     }
@@ -138,6 +141,7 @@ export class EventSubManager {
     conn.welcomeTimer = setTimeout(() => {
       if (conn.ws === ws && !conn.sessionId) {
         logger.warn(`[eventsub] ${conn.login}: no welcome in ${WELCOME_TIMEOUT_MS}ms — retrying`);
+        recordEventsubReconnect('welcome_timeout');
         try { ws.terminate(); } catch {}
       }
     }, WELCOME_TIMEOUT_MS);
@@ -152,6 +156,7 @@ export class EventSubManager {
       this.flushWelcomeWaiters(conn, false);
       if (conn.parked) return;
       logger.warn(`[eventsub] ${conn.login}: socket closed (${code}), reconnecting`);
+      recordEventsubReconnect('socket_close');
       this.scheduleReconnect(conn);
     });
     ws.on('error', (err) => {
@@ -228,6 +233,7 @@ export class EventSubManager {
       const newUrl = msg.payload?.session?.reconnect_url;
       if (newUrl && conn.ws === ws) {
         logger.info(`[eventsub] ${conn.login}: session_reconnect → switching socket`);
+        recordEventsubReconnect('twitch_reconnect');
         const old = ws;
         this.connectConn(conn, newUrl);
         try { old.removeAllListeners('close'); old.close(); } catch {}
@@ -237,6 +243,7 @@ export class EventSubManager {
     } else if (type === 'revocation') {
       const cond = msg.payload?.subscription?.condition || {};
       const subType = msg.payload?.subscription?.type;
+      recordEventsubRevocation();
       logger.warn(`[eventsub] ${conn.login}: subscription revoked (${subType} ${JSON.stringify(cond)})`);
       // Drop the assignment so reconcile reassigns it (possibly via another mod)
       if (subType === 'channel.moderate') {
@@ -285,8 +292,13 @@ export class EventSubManager {
   private async reconcile(): Promise<void> {
     if (this.reconciling) { this.reconcileAgain = true; return; }
     this.reconciling = true;
+    const startedAt = jobStart('eventsub_reconcile');
     try {
       await this.reconcileOnce();
+      jobEnd('eventsub_reconcile', 'success', startedAt);
+    } catch (err) {
+      logger.error('[eventsub] reconcile failed', err);
+      jobEnd('eventsub_reconcile', 'error', startedAt);
     } finally {
       this.reconciling = false;
       if (this.reconcileAgain) {

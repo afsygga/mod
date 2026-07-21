@@ -5,6 +5,7 @@ import { getOnlineUsers } from '../websocket/wsHandler';
 import { recordAudit } from '../utils/audit';
 import { backfillAvatars, fetchChannelModerators } from '../utils/twitchMeta';
 import { recentIssues } from '../utils/logger';
+import { M } from '../utils/metrics';
 
 export const adminRouter = Router();
 
@@ -56,6 +57,31 @@ adminRouter.get('/health', async (_req: Request, res: Response) => {
         })),
       },
       recent_issues: recentIssues.slice(0, 30),
+      metrics: {
+        uptime_sec: Math.round((Date.now() - M.startTs) / 1000),
+        memory_rss: process.memoryUsage().rss,
+        memory_heap_used: process.memoryUsage().heapUsed,
+        chat: M.chat,
+        chat_dropped: M.chatDropped,
+        spam_decisions: M.spamDecisions,
+        moderation: M.moderation,
+        automod: M.automod,
+        token_refresh: M.tokenRefresh,
+        irc_reconnects: M.ircReconnects,
+        eventsub: {
+          required_moderate: channels.length,
+          active_moderate: moderateSet.size,
+          required_stream: channels.length,
+          active_stream: streamSet.size,
+          reconnects: M.eventsubReconnects,
+          revocations: M.eventsubRevocations,
+        },
+        jobs: M.jobs,
+        db_pool: db.poolStats(),
+        db_pool_errors: M.dbPoolErrors,
+        ws: { ...M.ws, clients: (global as any).wss?.clients?.size ?? 0 },
+        process_unhandled_errors: M.process.unhandledErrors,
+      },
       ts: Date.now(),
     });
   } catch (err) {

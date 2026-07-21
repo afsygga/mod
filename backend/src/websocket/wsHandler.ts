@@ -1,11 +1,13 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import { logger } from '../utils/logger';
+import { recordWsBroadcastAttempts, recordWsSendError, recordWsOpen, recordWsClose } from '../utils/metrics';
 
 export function broadcast(wss: WebSocketServer, data: object): void {
   const json = JSON.stringify(data);
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(json);
+      recordWsBroadcastAttempts();
+      try { client.send(json); } catch { recordWsSendError(); }
     }
   });
 }
@@ -25,6 +27,7 @@ export function getOnlineUsers(): OnlineUser[] {
 
 export function wsHandler(wss: WebSocketServer): void {
   wss.on('connection', (ws) => {
+    recordWsOpen();
     logger.info('WebSocket client connected');
     ws.send(JSON.stringify({ type: 'connected', ts: Date.now() }));
 
@@ -44,6 +47,7 @@ export function wsHandler(wss: WebSocketServer): void {
     });
 
     ws.on('close', () => {
+      recordWsClose();
       onlineUsers.delete(ws);
       logger.info('WebSocket client disconnected');
     });
