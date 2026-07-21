@@ -625,60 +625,66 @@ export class TwitchManager {
       if (!broadcasterId) return 'Не удалось найти broadcaster_id';
 
       // Changing the category REQUIRES the broadcaster's OWN token with
-      // channel:manage:broadcast (a moderator token can't do it). Two sources,
-      // in priority:
-      //   1. broadcaster_tokens — the dedicated /broadcaster-connect flow.
+      // channel:manage:broadcast (a moderator token can't do it). We collect
+      // ALL viable credentials and try them in order:
+      //   1. broadcaster_tokens — the dedicated /broadcaster flow.
       //   2. the streamer's normal site login token — the main Twitch login
       //      already requests channel:manage:broadcast, and the broadcaster's
       //      twitch_username IS the channel name, so a streamer who signed in
       //      via Twitch ONCE can change category with NO second authorization.
-      let patchToken: string | null = null;
-      let refreshPatchToken: () => Promise<string | null> = async () => null;
+      // A dead broadcaster row (e.g. a day-one /broadcaster auth from before
+      // refresh_token storage existed, or a reauthorization_required grant)
+      // must NOT shadow a working login token — on 401/403 we fall through to
+      // the next credential instead of giving up.
+      type PatchCand = { token: string; refresh: () => Promise<string | null> };
+      const candidates: PatchCand[] = [];
 
       const { rows: btRows } = await db.query(
-        'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channelName]
+        'SELECT access_token, auth_status FROM broadcaster_tokens WHERE twitch_login=$1', [channelName]
       );
-      if (btRows[0]?.access_token) {
-        patchToken = btRows[0].access_token;
-        refreshPatchToken = () => refreshBroadcasterToken(channelName);
-      } else {
-        // Fall back to the broadcaster's own site-login token.
-        const { rows: ur } = await db.query(
-          'SELECT email, twitch_oauth FROM users WHERE LOWER(twitch_username)=LOWER($1)', [channelName]
-        );
-        if (ur[0]?.twitch_oauth) {
-          patchToken = String(ur[0].twitch_oauth).replace(/^oauth:/, '');
-          const brEmail = ur[0].email as string;
-          refreshPatchToken = () => refreshUserToken(brEmail);
-        }
+      if (btRows[0]?.access_token && btRows[0]?.auth_status !== 'reauthorization_required') {
+        candidates.push({ token: btRows[0].access_token, refresh: () => refreshBroadcasterToken(channelName) });
       }
-
-      if (!patchToken) {
+      const { rows: ur } = await db.query(
+        'SELECT email, twitch_oauth, twitch_auth_status FROM users WHERE LOWER(twitch_username)=LOWER($1)', [channelName]
+      );
+      if (ur[0]?.twitch_oauth && ur[0]?.twitch_auth_status !== 'reauthorization_required') {
+        const brEmail = ur[0].email as string;
+        candidates.push({ token: String(ur[0].twitch_oauth).replace(/^oauth:/, ''), refresh: () => refreshUserToken(brEmail) });
+      }
+      if (candidates.length === 0) {
         return `Категория не изменена: стримеру нужно войти на сайте через Twitch`;
       }
-      let patchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${patchToken}`, 'Content-Type': 'application/json' };
-      let patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
-        method: 'PATCH', headers: patchHeaders, body: JSON.stringify({ game_id: game.id }),
-      });
-      if (patchRes.status === 401) {
-        const fresh = await refreshPatchToken();
-        if (fresh) {
-          patchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${fresh}`, 'Content-Type': 'application/json' };
-          patchRes = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
-            method: 'PATCH', headers: patchHeaders, body: JSON.stringify({ game_id: game.id }),
-          });
+
+      const doPatch = async (tok: string): Promise<{ ok: boolean; status: number; message: string }> => {
+        const r = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${broadcasterId}`, {
+          method: 'PATCH',
+          headers: { 'Client-Id': clientId, 'Authorization': `Bearer ${tok}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ game_id: game.id }),
+        });
+        if (r.ok) return { ok: true, status: r.status, message: '' };
+        const err: any = await r.json().catch(() => ({}));
+        return { ok: false, status: r.status, message: err?.message || String(r.status) };
+      };
+
+      let lastStatus = 0;
+      let lastMsg = '';
+      for (const cand of candidates) {
+        let attempt = await doPatch(cand.token);
+        if (attempt.status === 401) {
+          // Confirmed-expired access → one refresh of the matching credentials
+          const fresh = await cand.refresh();
+          if (fresh) attempt = await doPatch(fresh);
         }
+        if (attempt.ok) return `Категория изменена: ${game.name}`;
+        lastStatus = attempt.status;
+        lastMsg = attempt.message;
+        // 401 (dead grant) / 403 (grant without the scope) → try next credential
       }
-      // A 403 means the token lacks channel:manage:broadcast (e.g. a broadcaster
-      // who authorized before that scope existed) — tell them to re-login.
-      if (patchRes.status === 403) {
+      if (lastStatus === 401 || lastStatus === 403) {
         return `Категория не изменена: перезайди на сайте через Twitch (нужны новые права)`;
       }
-      if (!patchRes.ok) {
-        const err: any = await patchRes.json().catch(() => ({}));
-        return `Ошибка: ${err?.message || patchRes.status}`;
-      }
-      return `Категория изменена: ${game.name}`;
+      return `Ошибка: ${lastMsg || lastStatus}`;
     } catch (err: any) {
       return `Ошибка: ${err?.message}`;
     }
