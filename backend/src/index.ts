@@ -3,11 +3,11 @@ import { recordUnhandled } from './utils/metrics';
 
 // Prevent unhandled rejections from crashing the process
 process.on('unhandledRejection', (reason) => {
-  recordUnhandled();
+  recordUnhandled('unhandled_rejection');
   console.error('[unhandledRejection]', reason);
 });
 process.on('uncaughtException', (err) => {
-  recordUnhandled();
+  recordUnhandled('uncaught_exception');
   console.error('[uncaughtException]', err);
 });
 import express from 'express';
@@ -32,6 +32,7 @@ import { authenticate } from './auth/authMiddleware';
 import { TwitchManager } from './twitch/TwitchManager';
 import { EventSubManager } from './twitch/EventSubManager';
 import { startTokenValidator } from './twitch/tokenValidator';
+import { register as metricsRegister, setPitProvider, setBuildInfo, setOauthSessions, Pit } from './utils/metrics';
 import { TelegramBot } from './telegram/TelegramBot';
 import { wsHandler } from './websocket/wsHandler';
 import { logger } from './utils/logger';
@@ -75,8 +76,20 @@ setInterval(() => {
   }
 }, 300_000);
 
-// Public
+// Backend readiness — flipped true after migrations + managers + loops start.
+let backendReady = false;
+
+// Public — no auth, no rate limit, no business side effects.
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
+app.get('/ready', (_req, res) => res.status(backendReady ? 200 : 503).json({ ready: backendReady }));
+app.get('/metrics', async (_req, res) => {
+  try {
+    res.set('Content-Type', metricsRegister.contentType);
+    res.end(await metricsRegister.metrics());
+  } catch (err) {
+    res.status(500).end(String(err));
+  }
+});
 app.use('/api/auth', rateLimit(10), authRouter);
 app.use('/api/twitch-creds', twitchCredsRouter);
 app.use('/api/twitch-oauth', twitchOAuthRouter);
@@ -103,6 +116,7 @@ const eventSubManager = new EventSubManager(wss);
 (global as any).eventSubManager = eventSubManager;
 
 const PORT = parseInt(process.env.PORT || '4000');
+const APP_VERSION = (() => { try { return require('../package.json').version || 'unknown'; } catch { return 'unknown'; } })();
 
 async function runMigrations() {
   try {
@@ -283,6 +297,50 @@ async function start() {
     // stamps last_validated, reactively refreshes confirmed-expired tokens,
     // marks dead grants reauthorization_required.
     startTokenValidator();
+
+    // ── Prometheus wiring ──────────────────────────────────────────────────
+    setBuildInfo(APP_VERSION, process.env.GIT_REVISION || 'unknown');
+    // Point-in-time gauges pulled on scrape (no SQL/Twitch here).
+    setPitProvider((): Pit => {
+      const h = twitchManager.getHealth?.() || { globalBot: { state: 'none' }, userConnections: [], channels: [] };
+      const es = eventSubManager.getStatus?.() || { moderate: [], stream: [] };
+      const chCount = h.channels.length;
+      const chBy = (s: string) => h.channels.filter((c: any) => c.status === s).length;
+      const userConn = h.userConnections.filter((c: any) => c.connected).length;
+      return {
+        ircGlobal: h.globalBot.state === 'OPEN' ? 'connected' : (h.globalBot.state === 'none' ? 'none' : 'disconnected'),
+        ircUser: { connected: userConn, disconnected: h.userConnections.length - userConn },
+        ircChannels: { connected: chBy('connected'), connecting: chBy('connecting'), disconnected: chBy('disconnected') },
+        eventsub: {
+          requiredModerate: chCount, activeModerate: es.moderate.length,
+          requiredStream: chCount, activeStream: es.stream.length,
+          connected: es.moderate.length > 0 || es.stream.length > 0 ? 1 : 0, connecting: 0,
+          disconnected: (es.moderate.length === 0 && es.stream.length === 0) ? 1 : 0,
+        },
+        dbPool: db.poolStats(),
+        wsClients: (wss as any).clients?.size ?? 0,
+        ready: backendReady,
+        subsystem: { globalIrc: !!process.env.TWITCH_BOT_OAUTH, twitchApi: !!(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET) },
+      };
+    });
+    // OAuth session counts recomputed off the scrape path (startup + every 5 min).
+    const refreshOauthGauges = async () => {
+      try {
+        const [{ rows: u }, { rows: b }] = await Promise.all([
+          db.query(`SELECT COALESCE(twitch_auth_status,'active') AS status, COUNT(*)::int AS c FROM users WHERE twitch_oauth IS NOT NULL GROUP BY 1`),
+          db.query(`SELECT COALESCE(auth_status,'active') AS status, COUNT(*)::int AS c FROM broadcaster_tokens GROUP BY 1`),
+        ]);
+        setOauthSessions([
+          ...u.map((r: any) => ({ kind: 'user', status: r.status, count: r.c })),
+          ...b.map((r: any) => ({ kind: 'broadcaster', status: r.status, count: r.c })),
+        ]);
+      } catch (err) { logger.error('[metrics] oauth gauge refresh failed', err); }
+    };
+    refreshOauthGauges();
+    setInterval(refreshOauthGauges, 5 * 60_000);
+
+    backendReady = true;
+    logger.info('Backend ready');
   } catch (err) {
     logger.error('Startup failed', err);
     process.exit(1);
@@ -294,6 +352,7 @@ let shuttingDown = false;
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
+  backendReady = false; // /ready → 503 during shutdown
   logger.info(`Received ${signal}, shutting down gracefully`);
   const force = setTimeout(() => process.exit(0), 5000);
   try {
