@@ -15,6 +15,7 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [blockedEmail, setBlockedEmail] = useState<string | null>(null);
   const [clientId, setClientId] = useState<string | null>(null);
+  const [gsiReady, setGsiReady] = useState(false);
   const btnRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,6 +83,9 @@ export function LoginPage() {
         logo_alignment: 'left',
         width: 272,
       });
+      // Плавное появление: GSI сначала рисует дефолтную кнопку и асинхронно
+      // заменяет её персонализированной, меняя размеры — прячем этот скачок
+      setTimeout(() => setGsiReady(true), 150);
     }
   }, [clientId, loginWithGoogle, blockedEmail]);
 
@@ -90,12 +94,7 @@ export function LoginPage() {
       minHeight: '100vh', display: 'flex', flexDirection: 'column',
       position: 'relative', overflow: 'hidden', background: '#050508',
     }}>
-      {/* Ambient glow — тёплый за лого, фиолетовый в углу */}
-      <div style={{
-        position: 'absolute', top: '-160px', left: '50%', transform: 'translateX(-50%)',
-        width: '620px', height: '620px', borderRadius: '50%', pointerEvents: 'none',
-        background: 'radial-gradient(circle, rgba(255,200,0,0.055) 0%, transparent 62%)',
-      }} />
+      {/* Ambient glow — фиолетовый в углу; тёплый привязан к лого ниже */}
       <div style={{
         position: 'absolute', bottom: '-240px', right: '-160px',
         width: '560px', height: '560px', borderRadius: '50%', pointerEvents: 'none',
@@ -119,7 +118,15 @@ export function LoginPage() {
               style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 textAlign: 'center', width: '100%', maxWidth: '340px',
+                position: 'relative',
               }}>
+
+              {/* Тёплое свечение — привязано к лого и названию, а не к странице */}
+              <div style={{
+                position: 'absolute', top: '-150px', left: '50%', transform: 'translateX(-50%)',
+                width: '440px', height: '440px', borderRadius: '50%', pointerEvents: 'none',
+                background: 'radial-gradient(circle, rgba(255,200,0,0.06) 0%, transparent 60%)',
+              }} />
 
               {/* Logo + название — без изменений по сути, крупнее и чище */}
               <img src="/lightning.gif" alt=""
@@ -138,7 +145,15 @@ export function LoginPage() {
                 width: '100%', padding: '26px 24px', borderRadius: '18px',
                 background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
               }}>
-                <div ref={btnRef} style={{ display: 'flex', justifyContent: 'center', minHeight: '44px' }} />
+                {/* Жёсткая рамка 272×44 + overflow hidden: GSI-кнопка внутри может
+                    перестраиваться сколько угодно — макет страницы не шелохнётся */}
+                <div style={{
+                  width: '272px', height: '44px', margin: '0 auto', overflow: 'hidden',
+                  display: 'flex', justifyContent: 'center', alignItems: 'center',
+                  opacity: gsiReady ? 1 : 0, transition: 'opacity 0.25s ease',
+                }}>
+                  <div ref={btnRef} />
+                </div>
 
                 {!clientId && (
                   <div style={{ fontSize: '11px', color: '#ff7070', marginTop: '12px' }}>
