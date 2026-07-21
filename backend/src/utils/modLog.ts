@@ -2,8 +2,6 @@ import { db } from '../database/db';
 import { logger } from './logger';
 
 const PUNITIVE = new Set(['MUTED', 'AUTO_MUTED', 'BANNED']);
-// Actions that can be logged twice (site action + EventSub echo of the same event)
-const ECHO_DEDUP = new Set(['MUTED', 'AUTO_MUTED', 'BANNED', 'UNBANNED']);
 
 export interface ModLogEntry {
   channel: string;
@@ -20,33 +18,47 @@ export interface ModLogEntry {
  * callers know whether to also bump counters / broadcast (skipped = not counted
  * anywhere, per product rule).
  *
- * Dedup rules:
- *  - Punitive double-action: a MUTED/AUTO_MUTED/BANNED on a target that already
- *    got a punitive action within the last 5s counts ONCE. Covers "a mod muted
- *    someone, then the same person is muted/banned again seconds later" (another
- *    mod, escalation, or the EventSub echo).
- *  - Echo: the exact same mute/ban/unban logged within 15s (site action + its
- *    EventSub echo of the same event). FLAGGED (message deletes) is never
- *    deduped — each deleted message is a distinct event.
+ * Rule: a mute/ban of a user who is ALREADY under an active punishment doesn't
+ * count. "Already punished" means the previous timeout hasn't expired yet
+ * (created_at + its duration is still in the future) or the user is banned and
+ * hasn't been unbanned since. So if one mod mutes someone and another mod
+ * mutes/bans the same person 5 seconds — or a minute — later while the first
+ * timeout is still running, only the first counts. Once the timeout expires (or
+ * an unban happens), a fresh mute counts again. This also absorbs the EventSub
+ * echo of a site action. UNBANNED is de-duped only against its own echo (15s);
+ * FLAGGED (message deletes) is never de-duped — each delete is a distinct event.
  */
 export async function logModerationAction(e: ModLogEntry): Promise<boolean> {
   try {
     if (PUNITIVE.has(e.action)) {
       const { rows } = await db.query(
-        `SELECT 1 FROM moderation_logs
+        `SELECT action, duration_seconds,
+                EXTRACT(EPOCH FROM (NOW() - created_at)) AS age_sec
+         FROM moderation_logs
          WHERE channel_name=$1 AND LOWER(username)=LOWER($2)
-           AND action IN ('MUTED','AUTO_MUTED','BANNED')
-           AND created_at > NOW() - INTERVAL '5 seconds' LIMIT 1`,
+           AND action IN ('MUTED','AUTO_MUTED','BANNED','UNBANNED')
+         ORDER BY created_at DESC LIMIT 1`,
         [e.channel, e.username]
       );
-      if (rows.length > 0) return false;
-    }
-    if (ECHO_DEDUP.has(e.action)) {
+      const last = rows[0];
+      if (last && last.action !== 'UNBANNED') {
+        let active: boolean;
+        if (last.action === 'BANNED') {
+          active = true; // banned until an explicit unban
+        } else {
+          // timeout still running? fall back to 60s if duration is unknown
+          const dur = Number(last.duration_seconds) || 60;
+          active = Number(last.age_sec) < dur;
+        }
+        if (active) return false; // already punished — this repeat doesn't count
+      }
+    } else if (e.action === 'UNBANNED') {
+      // echo of a site unban (site action + EventSub notification of the same)
       const { rows } = await db.query(
         `SELECT 1 FROM moderation_logs
-         WHERE channel_name=$1 AND LOWER(username)=LOWER($2) AND action=$3
+         WHERE channel_name=$1 AND LOWER(username)=LOWER($2) AND action='UNBANNED'
            AND created_at > NOW() - INTERVAL '15 seconds' LIMIT 1`,
-        [e.channel, e.username, e.action]
+        [e.channel, e.username]
       );
       if (rows.length > 0) return false;
     }
