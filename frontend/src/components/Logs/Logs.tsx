@@ -9,6 +9,7 @@ import { Footer } from '../Footer/Footer';
 import { ChatterName } from '../common/ChatterName';
 
 interface ContextMsg { message: string; spam_score: number; reasons: string[] | null; created_at: string; }
+interface LogStats { total: number; muted: number; banned: number; flagged: number; auto: number; today: number; }
 interface CoActor { action: string; duration_seconds: number | null; created_at: string; performed_by: string; }
 interface LogContext { messages: ContextMsg[]; co_actors: CoActor[]; }
 
@@ -65,6 +66,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   const [unbanning, setUnbanning] = useState<Record<number, 'loading' | 'done'>>({});
   const [expanded, setExpanded] = useState<number | null>(null);
   const [context, setContext] = useState<Record<number, LogContext | 'loading'>>({});
+  const [srvStats, setSrvStats] = useState<LogStats | null>(null);
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const t = T[lang];
@@ -74,6 +76,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   const loadLogs = async (reset = true) => {
     if (reset) setRefreshing(true);
     else setLoadingMore(true);
+    if (reset) api.get<LogStats>('/api/logs/stats').then(setSrvStats).catch(() => {});
     try {
       const offset = reset ? 0 : logs.length;
       const data = await api.get<ModerationLog[]>(`/api/logs?limit=${PAGE_SIZE}&offset=${offset}`);
@@ -179,11 +182,12 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
     URL.revokeObjectURL(url);
   };
 
-  // Stats
+  // Stats — real totals from the server (over ALL rows, not just the loaded
+  // page), falling back to what's loaded until the count arrives.
   const stats = useMemo(() => {
     const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
     const dayMs = dayStart.getTime();
-    return {
+    const local = {
       total: logs.length,
       muted: logs.filter(l => l.action === 'MUTED' || l.action === 'AUTO_MUTED').length,
       banned: logs.filter(l => l.action === 'BANNED').length,
@@ -191,7 +195,8 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
       auto: logs.filter(l => l.action === 'AUTO_MUTED').length,
       today: logs.filter(l => new Date(l.created_at).getTime() >= dayMs).length,
     };
-  }, [logs]);
+    return srvStats ? { ...local, ...srvStats } : local;
+  }, [logs, srvStats]);
 
   // Shared grid template so header + rows align
   const GRID = '70px 95px 100px 130px 120px 50px minmax(120px,1fr) auto 50px 28px 28px';

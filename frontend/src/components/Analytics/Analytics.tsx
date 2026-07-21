@@ -1370,6 +1370,15 @@ function ModActivityChart({ channel }: { channel: string }) {
     return { buckets: bkts, topMods: top, seriesByMod: byMod };
   }, [data]);
 
+  // Stable colour per moderator (by login) so line, hover dot, tooltip and
+  // legend always match — indexing by array position drifted once some mods
+  // were filtered out of the tooltip.
+  const colorByLogin = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    topMods.forEach((m, i) => { map[m.login] = MOD_PALETTE[i % MOD_PALETTE.length]; });
+    return map;
+  }, [topMods]);
+
   const visibleMods = topMods.filter(m => !hidden.has(m.login));
   const maxY = Math.max(1, ...visibleMods.flatMap(m => seriesByMod[m.login] || [0]));
   const isEmpty = !loading && (!data || topMods.length === 0 || topMods.every(m => (seriesByMod[m.login] || []).every(v => v === 0)));
@@ -1455,7 +1464,7 @@ function ModActivityChart({ channel }: { channel: string }) {
                   const pts: [number, number][] = arr.map((v, i) => [i, v]);
                   const path = smoothLinePath(pts, CW, CH, maxY);
                   return (
-                    <path key={m.login} d={path} fill="none" stroke={MOD_PALETTE[mi % MOD_PALETTE.length]}
+                    <path key={m.login} d={path} fill="none" stroke={colorByLogin[m.login]}
                       strokeWidth="1.8" strokeLinecap="round" opacity={0.9} />
                   );
                 })}
@@ -1469,7 +1478,7 @@ function ModActivityChart({ channel }: { channel: string }) {
                   const v = (seriesByMod[m.login] || [])[hover.idx] || 0;
                   if (v === 0) return null;
                   return <circle key={m.login} cx={toX(hover.idx)} cy={CH - (v / maxY) * CH} r="3"
-                    fill={MOD_PALETTE[mi % MOD_PALETTE.length]} stroke="rgba(0,0,0,0.6)" strokeWidth="1" />;
+                    fill={colorByLogin[m.login]} stroke="rgba(0,0,0,0.6)" strokeWidth="1" />;
                 })}
               </g>
 
@@ -1501,9 +1510,9 @@ function ModActivityChart({ channel }: { channel: string }) {
                   <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginBottom: '5px', fontWeight: 600 }}>
                     {fmtBucket(buckets[hover.idx])}
                   </div>
-                  {rows.map(({ m, mi, v }) => (
+                  {rows.map(({ m, v }) => (
                     <div key={m.login} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '1.5px 0' }}>
-                      <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: MOD_PALETTE[mi % MOD_PALETTE.length], flexShrink: 0 }} />
+                      <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: colorByLogin[m.login], flexShrink: 0 }} />
                       <span style={{ flex: 1, fontSize: '11px', color: 'rgba(255,255,255,0.75)', whiteSpace: 'nowrap' }}>{m.display_name}</span>
                       <span style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>{v}</span>
                     </div>
@@ -1515,8 +1524,8 @@ function ModActivityChart({ channel }: { channel: string }) {
 
           {/* legend */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', marginTop: '12px' }}>
-            {topMods.map((m, mi) => {
-              const color = MOD_PALETTE[mi % MOD_PALETTE.length];
+            {topMods.map((m) => {
+              const color = colorByLogin[m.login];
               const off = hidden.has(m.login);
               return (
                 <div key={m.login} onClick={() => toggle(m.login)} style={{

@@ -40,6 +40,38 @@ logsRouter.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// Real totals over ALL log rows (not just the loaded page) for the stats bar.
+logsRouter.get('/stats', async (req: Request, res: Response) => {
+  const isAdmin = req.user?.role === 'admin';
+  const { channel } = req.query;
+  const empty = { total: 0, muted: 0, banned: 0, flagged: 0, auto: 0, today: 0 };
+  try {
+    const params: any[] = [];
+    let where = 'primary_id IS NULL';
+    if (!isAdmin) {
+      const owned = await getOwnedChannels(req.user?.email);
+      if (owned.length === 0) return res.json(empty);
+      params.push(owned);
+      where += ` AND channel_name = ANY($${params.length})`;
+    }
+    if (channel) { params.push(channel); where += ` AND channel_name=$${params.length}`; }
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE action IN ('MUTED','AUTO_MUTED'))::int AS muted,
+              COUNT(*) FILTER (WHERE action='BANNED')::int AS banned,
+              COUNT(*) FILTER (WHERE action='FLAGGED')::int AS flagged,
+              COUNT(*) FILTER (WHERE action='AUTO_MUTED')::int AS auto,
+              COUNT(*) FILTER (WHERE created_at AT TIME ZONE 'Europe/Moscow'
+                               >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Moscow'))::int AS today
+       FROM moderation_logs WHERE ${where}`,
+      params
+    );
+    res.json(rows[0] || empty);
+  } catch {
+    res.status(500).json(empty);
+  }
+});
+
 // Recent chat messages from the actioned user leading up to the mod action —
 // so a log row can show "what they said before the mute" (#3).
 logsRouter.get('/:id/context', async (req: Request, res: Response) => {
