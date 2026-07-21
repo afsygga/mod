@@ -5,7 +5,7 @@ import { db } from '../database/db';
 import { broadcast } from '../websocket/wsHandler';
 import { logger } from '../utils/logger';
 import { TelegramBot } from '../telegram/TelegramBot';
-import { refreshUserToken, refreshBroadcasterToken, getAppToken } from './twitchToken';
+import { refreshUserToken, refreshBroadcasterToken, getAppToken, validateAccessToken } from './twitchToken';
 
 interface UserConnection {
   email: string;
@@ -16,17 +16,6 @@ interface UserConnection {
   connected: boolean;
 }
 
-/** Validate a raw Twitch access token, distinguishing invalid from transient. */
-async function validateAccessToken(rawToken: string): Promise<'valid' | 'invalid_401' | 'temporary'> {
-  try {
-    const r = await fetch('https://id.twitch.tv/oauth2/validate', {
-      headers: { 'Authorization': `OAuth ${rawToken}` },
-    });
-    if (r.ok) return 'valid';
-    if (r.status === 401) return 'invalid_401';
-    return 'temporary';
-  } catch { return 'temporary'; }
-}
 
 interface ChannelState {
   name: string;

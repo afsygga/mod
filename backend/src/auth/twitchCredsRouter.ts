@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
 import { authenticate } from './authMiddleware';
 import { logger } from '../utils/logger';
-import { clearUserReauth } from '../twitch/twitchToken';
 
 export const twitchCredsRouter = Router();
 
@@ -27,14 +26,17 @@ twitchCredsRouter.use(authenticate);
 twitchCredsRouter.get('/', async (req: Request, res: Response) => {
   const email = req.user!.email;
   const { rows } = await db.query(
-    'SELECT twitch_username, twitch_oauth FROM users WHERE email=$1',
+    'SELECT twitch_username, twitch_oauth, twitch_auth_status FROM users WHERE email=$1',
     [email]
   );
-  if (rows.length === 0) return res.json({ twitch_username: null, has_oauth: false });
+  if (rows.length === 0) return res.json({ twitch_username: null, has_oauth: false, auth_status: null });
   const row = rows[0];
   res.json({
     twitch_username: row.twitch_username,
     has_oauth: !!row.twitch_oauth,
+    // BUG-13: UI signal — 'reauthorization_required' means the refresh chain is
+    // dead and the user must re-run the Twitch OAuth flow.
+    auth_status: row.twitch_oauth ? (row.twitch_auth_status || 'active') : null,
     // mask: oauth:****
     oauth_preview: row.twitch_oauth ? row.twitch_oauth.slice(0, 8) + '…' + row.twitch_oauth.slice(-4) : null,
   });
@@ -74,10 +76,11 @@ twitchCredsRouter.put('/', async (req: Request, res: Response) => {
   // refresh token belongs to a different grant and must not survive, or a
   // background refresh would overwrite the manual access with the old pair.
   await db.query(
-    'UPDATE users SET twitch_username=$1, twitch_oauth=$2, twitch_refresh=NULL WHERE email=$3',
+    `UPDATE users SET twitch_username=$1, twitch_oauth=$2, twitch_refresh=NULL,
+                      twitch_auth_status='active', twitch_last_validated=NOW()
+     WHERE email=$3`,
     [cleanUsername, cleanOauth, email]
   );
-  clearUserReauth(email);
 
   // Connect IRC for this user
   try {
@@ -153,10 +156,11 @@ twitchCredsRouter.delete('/', async (req: Request, res: Response) => {
   // resurrect the disconnected integration. Idempotent — a second DELETE is a
   // no-op that still returns success.
   await db.query(
-    'UPDATE users SET twitch_username=NULL, twitch_oauth=NULL, twitch_refresh=NULL WHERE email=$1',
+    `UPDATE users SET twitch_username=NULL, twitch_oauth=NULL, twitch_refresh=NULL,
+                      twitch_auth_status='disconnected'
+     WHERE email=$1`,
     [email]
   );
-  clearUserReauth(email);
 
   const tm = (global as any).twitchManager;
   if (tm) await tm.removeUserConnection(email).catch(() => {});

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
-import { backfillAvatars } from '../utils/twitchMeta';
+import { backfillAvatars, fetchChannelModerators } from '../utils/twitchMeta';
 
 // Analytics endpoints available to any authenticated user (mounted with
 // `authenticate` only in index.ts). Mirrors the admin analytics handlers.
@@ -44,43 +44,13 @@ analyticsRouter.get('/channels/:channel/moderators', async (req: Request, res: R
 
     if (!broadcasterId) return res.status(404).json({ error: 'broadcaster not found' });
 
-    // 2. Fetch moderator list from Helix. "Get Moderators" requires the
-    // BROADCASTER's token, so prefer the broadcaster token captured via
-    // /broadcaster; fall back to the owner's OAuth token.
-    const clientId = process.env.TWITCH_CLIENT_ID || '';
-    const { rows: btRows } = await db.query(
-      'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channel]
-    );
-    let accessToken: string = btRows[0]?.access_token || '';
-    if (!accessToken) {
-      const { rows: userRows } = await db.query('SELECT twitch_oauth FROM users WHERE email=$1', [ownerEmail]);
-      const rawOauth: string = userRows[0]?.twitch_oauth || '';
-      accessToken = rawOauth.startsWith('oauth:') ? rawOauth.slice(6) : rawOauth;
-    }
-    const oauthHeaders: Record<string, string> = accessToken
-      ? { 'Client-Id': clientId, 'Authorization': `Bearer ${accessToken}` }
-      : await tm.getHelixHeadersPublic(ownerEmail);
-
-    let mods: any[] = [];
-    let cursor: string | null = null;
-    let helixError: string | null = null;
-    do {
-      const url = `https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=${broadcasterId}&first=100${cursor ? `&after=${cursor}` : ''}`;
-      const r = await fetch(url, { headers: oauthHeaders });
-      if (!r.ok) {
-        const errBody: any = await r.json().catch(() => ({}));
-        console.error('[moderators] Twitch API error:', r.status, JSON.stringify(errBody), 'url:', url, 'hasToken:', !!accessToken);
-        helixError = `Twitch API ${r.status}: ${errBody?.message || r.statusText}`;
-        break;
-      }
-      const d: any = await r.json();
-      mods = mods.concat(d.data || []);
-      cursor = d.pagination?.cursor || null;
-    } while (cursor);
-
+    // 2. Fetch moderator list from Helix via the shared helper (401 → one
+    // refresh of the right credentials → retry, BUG-06).
+    const { mods, error: helixError } = await fetchChannelModerators(channel, ownerEmail, broadcasterId);
     if (helixError && mods.length === 0) {
       return res.status(403).json({ error: helixError, hint: 'Переподключи Twitch аккаунт через OAuth.' });
     }
+    const oauthHeaders: Record<string, string> = await tm.getHelixHeadersPublic(ownerEmail);
 
     // 3. Fetch Twitch avatars for all mods (from cache, then Helix for missing ones)
     const logins = mods.map((m: any) => m.user_login.toLowerCase());

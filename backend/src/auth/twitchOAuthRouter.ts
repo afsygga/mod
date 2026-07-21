@@ -3,7 +3,6 @@ import crypto from 'crypto';
 import { db } from '../database/db';
 import { authenticate } from './authMiddleware';
 import { logger } from '../utils/logger';
-import { clearUserReauth, clearBroadcasterReauth } from '../twitch/twitchToken';
 
 export const twitchOAuthRouter = Router();
 
@@ -75,6 +74,17 @@ const BROADCASTER_SCOPES = [
   'user:read:email',
 ].join(' ');
 
+// BUG-15: the minimal scopes each flow MUST end up with for its core features
+// to work. If the granted token lacks any of these, the connection is not a
+// success — persisting it would just produce confusing 403s later.
+const REQUIRED_USER_SCOPES = ['chat:read', 'chat:edit', 'channel:moderate', 'moderator:manage:banned_users'];
+const REQUIRED_BROADCASTER_SCOPES = ['channel:manage:broadcast'];
+
+function missingScopes(granted: unknown, required: string[]): string[] {
+  const have = new Set(Array.isArray(granted) ? granted.map(String) : []);
+  return required.filter(s => !have.has(s));
+}
+
 // Step 1: return OAuth URL as JSON (called via fetch with Bearer token, then redirect from JS)
 twitchOAuthRouter.get('/connect-url', authenticate, (req: Request, res: Response) => {
   const clientId = process.env.TWITCH_CLIENT_ID;
@@ -139,6 +149,12 @@ twitchOAuthRouter.get('/callback', async (req: Request, res: Response) => {
       logger.error('Twitch token exchange returned incomplete tokens');
       return res.redirect(`${frontendUrl}?twitch_error=incomplete_tokens`);
     }
+    // BUG-15: verify the grant actually carries the scopes core features need.
+    const missing = missingScopes(tokenData.scope, REQUIRED_USER_SCOPES);
+    if (missing.length > 0) {
+      logger.warn(`Twitch OAuth: grant missing scopes [${missing.join(', ')}] for ${email}`);
+      return res.redirect(`${frontendUrl}?twitch_error=missing_scopes&scopes=${encodeURIComponent(missing.join(' '))}`);
+    }
 
     const userRes = await fetch('https://api.twitch.tv/helix/users', {
       headers: { 'Client-Id': clientId, 'Authorization': `Bearer ${accessToken}` },
@@ -152,13 +168,15 @@ twitchOAuthRouter.get('/callback', async (req: Request, res: Response) => {
     const oauthToken = `oauth:${accessToken}`;
     // BUG-08: require exactly one row updated — 0 means the account vanished
     // between exchange and write; treat as failure rather than silent success.
-    const upd = await db.query('UPDATE users SET twitch_username=$1, twitch_oauth=$2, twitch_refresh=$3 WHERE email=$4',
+    const upd = await db.query(
+      `UPDATE users SET twitch_username=$1, twitch_oauth=$2, twitch_refresh=$3,
+                        twitch_auth_status='active', twitch_last_validated=NOW()
+       WHERE email=$4`,
       [twitchUser.login, oauthToken, refreshToken, email]);
     if (upd.rowCount !== 1) {
       logger.error(`Twitch OAuth: user row not updated (rowCount=${upd.rowCount}) for ${email}`);
       return res.redirect(`${frontendUrl}?twitch_error=account_not_found`);
     }
-    clearUserReauth(email);
 
     logger.info(`Twitch OAuth connected: ${twitchUser.login} for ${email}`);
 
@@ -237,6 +255,12 @@ twitchOAuthRouter.get('/broadcaster-callback', async (req: Request, res: Respons
       logger.error('Broadcaster token exchange returned incomplete tokens');
       return res.redirect(`${frontendUrl}/broadcaster?error=incomplete_tokens`);
     }
+    // BUG-15: the whole point of this flow is channel:manage:broadcast.
+    const missingBr = missingScopes(tokenData.scope, REQUIRED_BROADCASTER_SCOPES);
+    if (missingBr.length > 0) {
+      logger.warn(`Broadcaster OAuth: grant missing scopes [${missingBr.join(', ')}]`);
+      return res.redirect(`${frontendUrl}/broadcaster?error=missing_scopes&scopes=${encodeURIComponent(missingBr.join(' '))}`);
+    }
 
     const userRes = await fetch('https://api.twitch.tv/helix/users', {
       headers: { 'Client-Id': clientId, 'Authorization': `Bearer ${accessToken}` },
@@ -249,16 +273,16 @@ twitchOAuthRouter.get('/broadcaster-callback', async (req: Request, res: Respons
 
     // BUG-08: confirm the upsert actually wrote a row via RETURNING.
     const up = await db.query(`
-      INSERT INTO broadcaster_tokens (twitch_login, twitch_id, access_token, refresh_token, updated_at)
-      VALUES ($1, $2, $3, $4, NOW())
-      ON CONFLICT (twitch_login) DO UPDATE SET access_token=$3, refresh_token=$4, twitch_id=$2, updated_at=NOW()
+      INSERT INTO broadcaster_tokens (twitch_login, twitch_id, access_token, refresh_token, auth_status, last_validated, updated_at)
+      VALUES ($1, $2, $3, $4, 'active', NOW(), NOW())
+      ON CONFLICT (twitch_login) DO UPDATE SET access_token=$3, refresh_token=$4, twitch_id=$2,
+        auth_status='active', last_validated=NOW(), updated_at=NOW()
       RETURNING twitch_login
     `, [twitchUser.login, twitchUser.id, accessToken, refreshToken]);
     if (up.rowCount !== 1) {
       logger.error(`Broadcaster OAuth: upsert wrote ${up.rowCount} rows for ${twitchUser.login}`);
       return res.redirect(`${frontendUrl}/broadcaster?error=persist_failed`);
     }
-    clearBroadcasterReauth(twitchUser.login);
 
     logger.info(`Broadcaster OAuth connected: ${twitchUser.login}`);
     res.redirect(`${frontendUrl}/broadcaster?success=1&login=${encodeURIComponent(twitchUser.login)}`);

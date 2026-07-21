@@ -1,4 +1,65 @@
 import { db } from '../database/db';
+import { refreshUserToken, refreshBroadcasterToken } from '../twitch/twitchToken';
+
+/**
+ * Fetch a channel's moderator list from Helix ("Get Moderators" needs the
+ * broadcaster's token; the channel owner's user token also works when they ARE
+ * the broadcaster). Shared by admin + analytics so both get the same 401 →
+ * refresh → retry-once behavior (BUG-06) instead of failing on an expired
+ * access while a perfectly good refresh token sits in the same row.
+ */
+export async function fetchChannelModerators(
+  channel: string,
+  ownerEmail: string | null,
+  broadcasterId: string,
+): Promise<{ mods: any[]; error: string | null }> {
+  const clientId = process.env.TWITCH_CLIENT_ID || '';
+
+  // Resolve the token + remember its source so a 401 refreshes the right one.
+  let token = '';
+  let source: 'broadcaster' | 'user' | null = null;
+  const { rows: bt } = await db.query(
+    'SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [channel]
+  );
+  if (bt[0]?.access_token) {
+    token = bt[0].access_token;
+    source = 'broadcaster';
+  } else if (ownerEmail) {
+    const { rows: u } = await db.query('SELECT twitch_oauth FROM users WHERE email=$1', [ownerEmail]);
+    const raw = u[0]?.twitch_oauth || '';
+    if (raw) { token = String(raw).replace(/^oauth:/, ''); source = 'user'; }
+  }
+  if (!token || !source) return { mods: [], error: 'no token available' };
+
+  let headers: Record<string, string> = { 'Client-Id': clientId, 'Authorization': `Bearer ${token}` };
+  const mods: any[] = [];
+  let cursor: string | null = null;
+  let refreshed = false;
+  do {
+    const url = `https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=${broadcasterId}&first=100${cursor ? `&after=${cursor}` : ''}`;
+    let r = await fetch(url, { headers });
+    if (r.status === 401 && !refreshed) {
+      // Confirmed-expired access → one refresh of the matching credentials,
+      // then retry the same page exactly once. 403 (scopes) must NOT refresh.
+      refreshed = true;
+      const fresh = source === 'broadcaster'
+        ? await refreshBroadcasterToken(channel)
+        : await refreshUserToken(ownerEmail);
+      if (fresh) {
+        headers = { 'Client-Id': clientId, 'Authorization': `Bearer ${fresh}` };
+        r = await fetch(url, { headers });
+      }
+    }
+    if (!r.ok) {
+      const errBody: any = await r.json().catch(() => ({}));
+      return { mods, error: `Twitch API ${r.status}: ${errBody?.message || r.statusText}` };
+    }
+    const d: any = await r.json();
+    mods.push(...(d.data || []));
+    cursor = d.pagination?.cursor || null;
+  } while (cursor);
+  return { mods, error: null };
+}
 
 /**
  * Backfill missing Twitch avatars for a list of logins: looks them up on Helix

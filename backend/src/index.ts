@@ -28,6 +28,7 @@ import { adminRouter } from './admin/adminRouter';
 import { authenticate } from './auth/authMiddleware';
 import { TwitchManager } from './twitch/TwitchManager';
 import { EventSubManager } from './twitch/EventSubManager';
+import { startTokenValidator } from './twitch/tokenValidator';
 import { TelegramBot } from './telegram/TelegramBot';
 import { wsHandler } from './websocket/wsHandler';
 import { logger } from './utils/logger';
@@ -188,6 +189,11 @@ async function runMigrations() {
       )
     `);
     await db.query(`ALTER TABLE broadcaster_tokens ADD COLUMN IF NOT EXISTS refresh_token TEXT`);
+    // OAuth session status (BUG-12/13): active | reauthorization_required | disconnected
+    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS twitch_auth_status VARCHAR(32) DEFAULT 'active'`);
+    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS twitch_last_validated TIMESTAMPTZ`);
+    await db.query(`ALTER TABLE broadcaster_tokens ADD COLUMN IF NOT EXISTS auth_status VARCHAR(32) DEFAULT 'active'`);
+    await db.query(`ALTER TABLE broadcaster_tokens ADD COLUMN IF NOT EXISTS last_validated TIMESTAMPTZ`);
     // One-time clean slate: wipe old stream history + chat messages so backend
     // tracking starts fresh from 2026-07-01. Guarded by a flag so it runs once.
     const { rows: resetFlag } = await db.query("SELECT 1 FROM settings WHERE key='reset_streams_2026_07_01'");
@@ -262,6 +268,11 @@ async function start() {
     // Start EventSub — captures ALL moderation actions (bans/timeouts/unbans/
     // deletes) from any client, live, and writes them to moderation_logs.
     eventSubManager.start();
+
+    // Hourly validation of every stored OAuth session (Twitch requirement) —
+    // stamps last_validated, reactively refreshes confirmed-expired tokens,
+    // marks dead grants reauthorization_required.
+    startTokenValidator();
   } catch (err) {
     logger.error('Startup failed', err);
     process.exit(1);

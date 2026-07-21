@@ -7,6 +7,8 @@ interface Status {
   twitch_username: string | null;
   has_oauth: boolean;
   oauth_preview?: string | null;
+  /** active | reauthorization_required | disconnected */
+  auth_status?: string | null;
 }
 
 interface Props {
@@ -27,7 +29,8 @@ export function TwitchSetup({ onDone, closeable, onClose }: Props) {
   useEffect(() => {
     api.get<Status>('/api/twitch-creds').then(s => {
       setStatus(s);
-      if (s.twitch_username && s.has_oauth) {
+      const needsReauth = s.auth_status === 'reauthorization_required';
+      if (s.twitch_username && s.has_oauth && !needsReauth) {
         // Already setup — for onboarding, just proceed
         if (!closeable) onDone();
       } else {
@@ -132,6 +135,20 @@ export function TwitchSetup({ onDone, closeable, onClose }: Props) {
 
         {step === 'form' && (
           <div style={{ marginTop: '20px' }}>
+            {status?.auth_status === 'reauthorization_required' && (
+              <div style={{
+                padding: '12px 14px', borderRadius: '10px', marginBottom: '14px',
+                background: 'rgba(255,152,0,0.08)', border: '1px solid rgba(255,152,0,0.25)',
+                fontSize: '12px', color: '#ffb74d', lineHeight: 1.55,
+                display: 'flex', alignItems: 'flex-start', gap: '9px',
+              }}>
+                <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: '1px' }} />
+                <span>
+                  Twitch отозвал доступ для <b>{status.twitch_username}</b> — автообновление токена больше невозможно.
+                  Нажми «Войти через Twitch», чтобы переподключить аккаунт.
+                </span>
+              </div>
+            )}
             {/* OAuth button */}
             <button
               onClick={async () => {
