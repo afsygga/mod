@@ -93,27 +93,22 @@ export function LoginPage() {
         logo_alignment: 'left',
         width: 272,
       });
-      // GSI сначала вставляет временную кнопку, потом заменяет её на iframe с
-      // персонализированной версией — если показать раньше, виден уродливый
-      // полупрозрачный «призрак» в момент подмены. Ждём фактической загрузки
-      // iframe (+буфер), со страховочными таймерами, чтобы кнопка никогда не
-      // осталась невидимой.
+      // Показываем кнопку через 200мс после ВСТАВКИ iframe в DOM — ждать его
+      // события load слишком долго (2-3с). Рамка 272×44 фиксирует макет, так
+      // что внутренние перестройки GSI страницу не двигают; короткий буфер
+      // прячет только самый первый пустой кадр iframe.
       const host = btnRef.current;
-      const revealAfterIframe = () => {
-        const iframe = host?.querySelector('iframe');
-        if (iframe) {
-          iframe.addEventListener('load', () => setTimeout(() => setGsiReady(true), 250), { once: true });
-          setTimeout(() => setGsiReady(true), 1500); // load мог уже пройти
-          return true;
-        }
-        return false;
-      };
-      if (!revealAfterIframe() && host) {
+      const onIframe = () => setTimeout(() => setGsiReady(true), 200);
+      if (host?.querySelector('iframe')) {
+        onIframe();
+      } else if (host) {
         const obs = new MutationObserver(() => {
-          if (revealAfterIframe()) obs.disconnect();
+          if (host.querySelector('iframe')) { obs.disconnect(); onIframe(); }
         });
         obs.observe(host, { childList: true, subtree: true });
-        setTimeout(() => { obs.disconnect(); setGsiReady(true); }, 2500); // жёсткая страховка
+        setTimeout(() => { obs.disconnect(); setGsiReady(true); }, 1200); // страховка
+      } else {
+        setGsiReady(true);
       }
     }
   }, [clientId, loginWithGoogle, blockedEmail]);
