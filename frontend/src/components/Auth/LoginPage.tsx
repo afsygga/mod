@@ -83,9 +83,28 @@ export function LoginPage() {
         logo_alignment: 'left',
         width: 272,
       });
-      // Плавное появление: GSI сначала рисует дефолтную кнопку и асинхронно
-      // заменяет её персонализированной, меняя размеры — прячем этот скачок
-      setTimeout(() => setGsiReady(true), 150);
+      // GSI сначала вставляет временную кнопку, потом заменяет её на iframe с
+      // персонализированной версией — если показать раньше, виден уродливый
+      // полупрозрачный «призрак» в момент подмены. Ждём фактической загрузки
+      // iframe (+буфер), со страховочными таймерами, чтобы кнопка никогда не
+      // осталась невидимой.
+      const host = btnRef.current;
+      const revealAfterIframe = () => {
+        const iframe = host?.querySelector('iframe');
+        if (iframe) {
+          iframe.addEventListener('load', () => setTimeout(() => setGsiReady(true), 250), { once: true });
+          setTimeout(() => setGsiReady(true), 1500); // load мог уже пройти
+          return true;
+        }
+        return false;
+      };
+      if (!revealAfterIframe() && host) {
+        const obs = new MutationObserver(() => {
+          if (revealAfterIframe()) obs.disconnect();
+        });
+        obs.observe(host, { childList: true, subtree: true });
+        setTimeout(() => { obs.disconnect(); setGsiReady(true); }, 2500); // жёсткая страховка
+      }
     }
   }, [clientId, loginWithGoogle, blockedEmail]);
 
