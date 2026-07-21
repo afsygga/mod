@@ -14,16 +14,26 @@ export function LoginPage() {
   const { loginWithGoogle } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [blockedEmail, setBlockedEmail] = useState<string | null>(null);
-  const [clientId, setClientId] = useState<string | null>(null);
+  // Build-time client id читается синхронно при первом рендере — иначе кадр с
+  // «GOOGLE_CLIENT_ID не настроен» мелькал при каждой загрузке страницы
+  const [clientId, setClientId] = useState<string | null>(
+    (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || null
+  );
+  // Предупреждение показываем только когда проверка ЗАВЕРШИЛАСЬ и id нет,
+  // а не пока идёт fallback-запрос к бэкенду
+  const [cfgChecked, setCfgChecked] = useState<boolean>(!!clientId);
   const [gsiReady, setGsiReady] = useState(false);
   const btnRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Use build-time env var first (always available, even when backend is down)
-    const buildTimeId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
-    if (buildTimeId) { setClientId(buildTimeId); return; }
+    if (clientId) return;
     // Fallback: fetch from backend
-    fetch(`${BASE}/api/auth/config`).then(r => r.json()).then(d => setClientId(d.google_client_id)).catch(() => {});
+    fetch(`${BASE}/api/auth/config`)
+      .then(r => r.json())
+      .then(d => setClientId(d.google_client_id || null))
+      .catch(() => {})
+      .finally(() => setCfgChecked(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -174,7 +184,7 @@ export function LoginPage() {
                   <div ref={btnRef} />
                 </div>
 
-                {!clientId && (
+                {cfgChecked && !clientId && (
                   <div style={{ fontSize: '11px', color: '#ff7070', marginTop: '12px' }}>
                     ⚠ GOOGLE_CLIENT_ID не настроен на сервере
                   </div>
