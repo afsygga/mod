@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ShieldAlert } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
-import { SuccessAnimation } from './SuccessAnimation';
 import { Footer } from '../Footer/Footer';
 
 const BASE = import.meta.env.VITE_API_URL || '';
@@ -27,7 +26,7 @@ export function LoginPage() {
   }, []);
 
   useEffect(() => {
-    if (!clientId) return;
+    if (!clientId || blockedEmail) return;
     // Load Google Identity script
     const existing = document.querySelector('script[data-gsi]');
     if (existing) initGoogle();
@@ -78,110 +77,136 @@ export function LoginPage() {
         theme: 'filled_black',
         size: 'large',
         type: 'standard',
-        shape: 'rectangular',
+        shape: 'pill',
         text: 'continue_with',
         logo_alignment: 'left',
+        width: 272,
       });
     }
-  }, [clientId, loginWithGoogle]);
+  }, [clientId, loginWithGoogle, blockedEmail]);
 
   return (
     <div style={{
-      minHeight: '100vh', overflow: 'auto',
-      display: 'flex', flexDirection: 'column',
+      minHeight: '100vh', display: 'flex', flexDirection: 'column',
+      position: 'relative', overflow: 'hidden', background: '#050508',
     }}>
+      {/* Ambient glow — тёплый за лого, фиолетовый в углу */}
+      <div style={{
+        position: 'absolute', top: '-160px', left: '50%', transform: 'translateX(-50%)',
+        width: '620px', height: '620px', borderRadius: '50%', pointerEvents: 'none',
+        background: 'radial-gradient(circle, rgba(255,200,0,0.055) 0%, transparent 62%)',
+      }} />
+      <div style={{
+        position: 'absolute', bottom: '-240px', right: '-160px',
+        width: '560px', height: '560px', borderRadius: '50%', pointerEvents: 'none',
+        background: 'radial-gradient(circle, rgba(160,112,255,0.05) 0%, transparent 62%)',
+      }} />
+
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: '40px 20px', position: 'relative',
       }}>
-      <motion.div
-        initial={{ opacity: 0, y: 12, scale: 0.97 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-        className="glass-card"
-        style={{
-          width: '100%', maxWidth: '420px', padding: '36px 32px',
-          textAlign: 'center', position: 'relative', overflow: 'hidden',
-        }}>
-
-        {/* Logo */}
-        <img src="/lightning.gif" alt=""
-          style={{
-            display: 'block', margin: '0 auto 16px',
-            width: '60px', height: '60px', objectFit: 'contain',
-            filter: 'drop-shadow(0 0 24px rgba(255,200,0,0.45))',
-          }} />
-
-        <h1 style={{
-          fontSize: '24px', fontWeight: 700, color: '#ffc800',
-          letterSpacing: '-0.01em', marginBottom: '6px',
-          textShadow: '0 0 30px rgba(255,200,0,0.35)',
-        }}>afsyg.gay</h1>
-        <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)', marginBottom: '28px' }}>
-          Smart Twitch Moderation
-        </p>
-
-        {!blockedEmail && (
-          <>
-            <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', marginBottom: '16px', lineHeight: 1.5 }}>
-              Войдите через Google аккаунт<br />
-              <span style={{ color: 'rgba(255,255,255,0.3)' }}>Доступ только для whitelisted email</span>
-            </div>
-
-            <div ref={btnRef} style={{ display: 'flex', justifyContent: 'center', minHeight: '44px' }} />
-
-            {!clientId && (
-              <div style={{ fontSize: '11px', color: '#ff7070', marginTop: '14px' }}>
-                ⚠ GOOGLE_CLIENT_ID не настроен на сервере
-              </div>
-            )}
-
-            {error && error !== 'not whitelisted' && (
-              <div style={{
-                marginTop: '16px', padding: '10px 14px', borderRadius: '10px',
-                background: 'rgba(240,71,71,0.1)', border: '1px solid rgba(240,71,71,0.25)',
-                color: '#ff7070', fontSize: '12px',
-              }}>{error}</div>
-            )}
-          </>
-        )}
-
-        {blockedEmail && (
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
-            <div style={{
-              width: '64px', height: '64px', borderRadius: '50%',
-              background: 'rgba(240,71,71,0.1)', border: '1px solid rgba(240,71,71,0.25)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              margin: '0 auto 18px',
-            }}>
-              <ShieldAlert size={28} style={{ color: '#ff7070' }} />
-            </div>
-            <h2 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px', color: 'rgba(255,255,255,0.92)' }}>
-              Доступ запрещён
-            </h2>
-            <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', marginBottom: '6px' }}>
-              Ваш email не в списке доступа:
-            </p>
-            <div style={{
-              fontSize: '13px', fontWeight: 600,
-              padding: '8px 14px', borderRadius: '10px', display: 'inline-block',
-              background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.85)',
-              marginBottom: '18px',
-            }}>{blockedEmail}</div>
-            <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '20px', lineHeight: 1.5 }}>
-              Свяжитесь с администратором чтобы получить доступ
-            </p>
-            <button onClick={() => { setBlockedEmail(null); setError(null); window.google?.accounts.id.disableAutoSelect?.(); }}
+        <AnimatePresence mode="wait">
+          {!blockedEmail ? (
+            <motion.div key="login"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               style={{
-                padding: '9px 18px', borderRadius: '10px', cursor: 'pointer',
-                background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.85)',
-                border: '1px solid rgba(255,255,255,0.1)', fontSize: '12px', fontWeight: 600,
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                textAlign: 'center', width: '100%', maxWidth: '340px',
               }}>
-              Попробовать другой аккаунт
-            </button>
-          </motion.div>
-        )}
-      </motion.div>
+
+              {/* Logo + название — без изменений по сути, крупнее и чище */}
+              <img src="/lightning.gif" alt=""
+                style={{
+                  width: '72px', height: '72px', objectFit: 'contain', marginBottom: '18px',
+                  filter: 'drop-shadow(0 0 28px rgba(255,200,0,0.5))',
+                }} />
+              <h1 style={{
+                fontSize: '28px', fontWeight: 800, color: '#ffc800',
+                letterSpacing: '-0.02em', lineHeight: 1, marginBottom: '8px',
+                textShadow: '0 0 36px rgba(255,200,0,0.35)',
+              }}>afsyg.gay</h1>
+              <p style={{
+                fontSize: '13px', color: 'rgba(255,255,255,0.4)',
+                letterSpacing: '0.02em', marginBottom: '40px',
+              }}>
+                Smart Twitch Moderation
+              </p>
+
+              {/* Единственное действие — вход через Google-почту */}
+              <div style={{
+                width: '100%', padding: '26px 24px', borderRadius: '18px',
+                background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+              }}>
+                <div ref={btnRef} style={{ display: 'flex', justifyContent: 'center', minHeight: '44px' }} />
+
+                {!clientId && (
+                  <div style={{ fontSize: '11px', color: '#ff7070', marginTop: '12px' }}>
+                    ⚠ GOOGLE_CLIENT_ID не настроен на сервере
+                  </div>
+                )}
+
+                {error && error !== 'not whitelisted' && (
+                  <div style={{
+                    marginTop: '14px', padding: '10px 14px', borderRadius: '10px',
+                    background: 'rgba(240,71,71,0.1)', border: '1px solid rgba(240,71,71,0.25)',
+                    color: '#ff7070', fontSize: '12px',
+                  }}>{error}</div>
+                )}
+              </div>
+
+              <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)', marginTop: '16px' }}>
+                Вход по приглашению — почта должна быть в списке доступа
+              </p>
+            </motion.div>
+          ) : (
+            <motion.div key="blocked"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              style={{
+                width: '100%', maxWidth: '380px', padding: '36px 32px',
+                borderRadius: '20px', textAlign: 'center',
+                background: 'rgba(20,20,26,0.66)', border: '1px solid rgba(255,255,255,0.07)',
+              }}>
+              <div style={{
+                width: '64px', height: '64px', borderRadius: '50%',
+                background: 'rgba(240,71,71,0.1)', border: '1px solid rgba(240,71,71,0.25)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                margin: '0 auto 18px',
+              }}>
+                <ShieldAlert size={28} style={{ color: '#ff7070' }} />
+              </div>
+              <h2 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px', color: 'rgba(255,255,255,0.92)' }}>
+                Доступ запрещён
+              </h2>
+              <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', marginBottom: '10px' }}>
+                Этой почты нет в списке доступа:
+              </p>
+              <div style={{
+                fontSize: '13px', fontWeight: 600, fontFamily: 'monospace',
+                padding: '8px 14px', borderRadius: '10px', display: 'inline-block',
+                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)',
+                color: 'rgba(255,255,255,0.85)', marginBottom: '16px',
+              }}>{blockedEmail}</div>
+              <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '22px', lineHeight: 1.5 }}>
+                Напиши администратору, чтобы получить доступ
+              </p>
+              <button onClick={() => { setBlockedEmail(null); setError(null); window.google?.accounts.id.disableAutoSelect?.(); }}
+                style={{
+                  padding: '10px 20px', borderRadius: '11px', cursor: 'pointer',
+                  background: 'rgba(255,200,0,0.1)', color: '#ffc800',
+                  border: '1px solid rgba(255,200,0,0.25)', fontSize: '12px', fontWeight: 700,
+                }}>
+                Войти с другой почтой
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
       <Footer />
     </div>
