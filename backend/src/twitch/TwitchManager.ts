@@ -6,6 +6,7 @@ import { broadcast } from '../websocket/wsHandler';
 import { logger } from '../utils/logger';
 import { TelegramBot } from '../telegram/TelegramBot';
 import { refreshUserToken, refreshBroadcasterToken, getAppToken, validateAccessToken } from './twitchToken';
+import { logModerationAction } from '../utils/modLog';
 
 interface UserConnection {
   email: string;
@@ -1077,17 +1078,17 @@ export class TwitchManager {
       logger.error(`muteUser error: ${err?.message}`);
     }
 
-    await db.query(
-      'INSERT INTO moderation_logs (channel_name, username, action, duration_seconds, performed_by) VALUES ($1,$2,$3,$4,$5)',
-      [channelName, username, 'MUTED', durationSeconds, performedBy]
-    ).catch(() => {});
-
-    await db.query(
-      'UPDATE user_profiles SET mute_count = mute_count + 1 WHERE username=$1 AND channel_name=$2',
-      [username, channelName]
-    ).catch(() => {});
-
-    broadcast(this.wss, { type: 'user_muted', channel: channelName, username, duration: durationSeconds });
+    // Dedup: a repeat mute/ban of the same user within 5s is not counted again.
+    const logged = await logModerationAction({
+      channel: channelName, username, action: 'MUTED', performedBy, durationSeconds,
+    });
+    if (logged) {
+      await db.query(
+        'UPDATE user_profiles SET mute_count = mute_count + 1 WHERE username=$1 AND channel_name=$2',
+        [username, channelName]
+      ).catch(() => {});
+      broadcast(this.wss, { type: 'user_muted', channel: channelName, username, duration: durationSeconds });
+    }
   }
 
   async banUser(channelName: string, username: string, performedBy: string, skipReason = false, customReason?: string): Promise<void> {
@@ -1121,12 +1122,10 @@ export class TwitchManager {
       logger.error(`banUser error: ${err?.message}`);
     }
 
-    await db.query(
-      'INSERT INTO moderation_logs (channel_name, username, action, performed_by) VALUES ($1,$2,$3,$4)',
-      [channelName, username, 'BANNED', performedBy]
-    ).catch(() => {});
-
-    broadcast(this.wss, { type: 'user_banned', channel: channelName, username });
+    const logged = await logModerationAction({
+      channel: channelName, username, action: 'BANNED', performedBy,
+    });
+    if (logged) broadcast(this.wss, { type: 'user_banned', channel: channelName, username });
   }
 
   async unbanUser(channelName: string, username: string, performedBy: string): Promise<void> {
@@ -1149,10 +1148,7 @@ export class TwitchManager {
     } catch (err: any) {
       logger.error(`unbanUser error: ${err?.message}`);
     }
-    await db.query(
-      'INSERT INTO moderation_logs (channel_name, username, action, performed_by) VALUES ($1,$2,$3,$4)',
-      [channelName, username, 'UNBANNED', performedBy]
-    ).catch(() => {});
+    await logModerationAction({ channel: channelName, username, action: 'UNBANNED', performedBy });
   }
 
   async clearChat(channelName: string, performedBy: string = 'SYSTEM'): Promise<void> {
@@ -1321,6 +1317,23 @@ export class TwitchManager {
 
   isConnected(): boolean {
     return this.globalClient?.readyState() === 'OPEN' || this.connections.size > 0;
+  }
+
+  /** Live IRC health for the admin System Health page. */
+  getHealth() {
+    return {
+      globalBot: {
+        configured: !!this.globalClient,
+        state: this.globalClient ? this.globalClient.readyState() : 'none', // OPEN|CONNECTING|CLOSING|CLOSED|none
+      },
+      userConnections: [...this.connections.values()].map(c => ({
+        email: c.email,
+        username: c.username,
+        connected: c.connected,
+        channels: [...c.joinedChannels],
+      })),
+      channels: this.getChannelNames().map(name => ({ name, status: this.getChannelStatus(name) })),
+    };
   }
 
   getChannelNames(): string[] {

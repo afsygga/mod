@@ -4,10 +4,64 @@ import { authenticate, requireAdmin } from '../auth/authMiddleware';
 import { getOnlineUsers } from '../websocket/wsHandler';
 import { recordAudit } from '../utils/audit';
 import { backfillAvatars, fetchChannelModerators } from '../utils/twitchMeta';
+import { recentIssues } from '../utils/logger';
 
 export const adminRouter = Router();
 
 adminRouter.use(authenticate, requireAdmin);
+
+// ============================================================================
+// SYSTEM HEALTH — single "is everything alive" view
+// ============================================================================
+adminRouter.get('/health', async (_req: Request, res: Response) => {
+  try {
+    const tm: any = (global as any).twitchManager;
+    const es: any = (global as any).eventSubManager;
+    const tmHealth = tm?.getHealth ? tm.getHealth() : null;
+    const esStatus = es?.getStatus ? es.getStatus() : { moderate: [], stream: [] };
+    const moderateSet = new Set<string>((esStatus.moderate || []).map((s: string) => s.toLowerCase()));
+    const streamSet = new Set<string>((esStatus.stream || []).map((s: string) => s.toLowerCase()));
+
+    const [{ rows: chRows }, { rows: users }, { rows: bts }] = await Promise.all([
+      db.query('SELECT name, status FROM channels ORDER BY name'),
+      db.query(`SELECT email, twitch_username, twitch_auth_status, twitch_last_validated
+                FROM users WHERE twitch_oauth IS NOT NULL ORDER BY twitch_username`),
+      db.query('SELECT twitch_login, auth_status, last_validated FROM broadcaster_tokens ORDER BY twitch_login'),
+    ]);
+
+    const channels = chRows.map((c: any) => ({
+      name: c.name,
+      irc: c.status,
+      eventsub_actions: moderateSet.has(c.name.toLowerCase()),
+      eventsub_stream: streamSet.has(c.name.toLowerCase()),
+    }));
+
+    const clientIdSet = !!process.env.TWITCH_CLIENT_ID && !!process.env.TWITCH_CLIENT_SECRET;
+
+    res.json({
+      env: { twitch_client_configured: clientIdSet, bot_configured: !!process.env.TWITCH_BOT_OAUTH },
+      bot: tmHealth?.globalBot || { configured: false, state: 'none' },
+      user_connections: tmHealth?.userConnections || [],
+      channels,
+      tokens: {
+        users: users.map((u: any) => ({
+          id: u.twitch_username || u.email,
+          status: u.twitch_auth_status || 'active',
+          last_validated: u.twitch_last_validated,
+        })),
+        broadcasters: bts.map((b: any) => ({
+          id: b.twitch_login,
+          status: b.auth_status || 'active',
+          last_validated: b.last_validated,
+        })),
+      },
+      recent_issues: recentIssues.slice(0, 30),
+      ts: Date.now(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'health failed' });
+  }
+});
 
 // ============================================================================
 // ONLINE USERS

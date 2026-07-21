@@ -7,6 +7,7 @@ import { Avatar } from '../UserCard/Avatar';
 import { api } from '../../hooks/useApi';
 import { T, Lang, muteDurations } from '../../utils/i18n';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { ChatterName } from '../common/ChatterName';
 
 interface Props {
   items: QueueItem[];
@@ -118,7 +119,7 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
         }}
         onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
         onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}>
-          {item.username}
+          <ChatterName channel={item.channel} name={item.username}>{item.username}</ChatterName>
         </span>
 
         <span title={item.channel} style={{

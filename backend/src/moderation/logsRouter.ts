@@ -40,6 +40,35 @@ logsRouter.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// Recent chat messages from the actioned user leading up to the mod action —
+// so a log row can show "what they said before the mute" (#3).
+logsRouter.get('/:id/context', async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
+  const isAdmin = req.user?.role === 'admin';
+  try {
+    const { rows: logRows } = await db.query(
+      'SELECT channel_name, username, created_at FROM moderation_logs WHERE id=$1', [id]
+    );
+    if (logRows.length === 0) return res.status(404).json({ error: 'not found' });
+    const log = logRows[0];
+    if (!isAdmin) {
+      const owned = await getOwnedChannels(req.user?.email);
+      if (!owned.includes(log.channel_name)) return res.status(403).json({ error: 'forbidden' });
+    }
+    const { rows } = await db.query(
+      `SELECT message, spam_score, reasons, created_at
+       FROM messages
+       WHERE channel_name=$1 AND LOWER(username)=LOWER($2) AND created_at <= $3
+       ORDER BY created_at DESC LIMIT 8`,
+      [log.channel_name, log.username, log.created_at]
+    );
+    res.json(rows.reverse()); // chronological (oldest → the message that got them muted)
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 logsRouter.delete('/:id', async (req: Request, res: Response) => {
   if (req.user?.role !== 'admin') return res.status(403).json({ error: 'admin required' });
   try {

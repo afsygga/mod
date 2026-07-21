@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { ChatMessage } from '../../types';
 import { getInitials, formatTime } from '../../utils/colors';
 import { Lang } from '../../utils/i18n';
+import { ChatterName } from '../common/ChatterName';
 
 interface Props {
   messages: ChatMessage[];
@@ -56,7 +57,7 @@ export function ChatWindow({ messages, activeChannel, detectThreshold, lang }: P
                 {activeChannel === 'all' && (
                   <span className="text-xs px-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>{msg.channel}</span>
                 )}
-                <span className="text-xs font-semibold" style={{ color: msg.color }}>{msg.username}</span>
+                <span className="text-xs font-semibold" style={{ color: msg.color }}><ChatterName channel={msg.channel} name={msg.username}>{msg.username}</ChatterName></span>
                 {msg.role !== 'Viewer' && roleStyle && (
                   <span className="text-xs px-1.5 py-0 rounded-lg font-semibold" style={{ background: roleStyle.bg, color: roleStyle.color }}>{msg.role}</span>
                 )}

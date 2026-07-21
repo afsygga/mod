@@ -4,11 +4,12 @@ import {
   Users, Mail, Tv2, Activity, BarChart3, Trash2, Shield, ShieldOff,
   UserPlus, Search, Crown, X, Plus, TrendingUp, MessageSquare, Zap,
   VolumeX, Ban, RotateCcw, AlertTriangle, ChevronDown, Circle, Clock, Wifi, ShieldCheck, ScrollText,
-  RefreshCw, UserCheck, ArrowLeft,
+  RefreshCw, UserCheck, ArrowLeft, HeartPulse, Radio, KeyRound,
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
+import { ChatterName } from '../common/ChatterName';
 
-type Tab = 'overview' | 'users' | 'whitelist' | 'channels' | 'logs' | 'moderators' | 'bans' | 'audit';
+type Tab = 'overview' | 'health' | 'users' | 'whitelist' | 'channels' | 'logs' | 'moderators' | 'bans' | 'audit';
 
 interface AdminUser {
   id: number; email: string; name: string | null; picture: string | null;
@@ -37,6 +38,7 @@ export function AdminPanel() {
         }}>Admin</div>
         {([
           ['overview', BarChart3, 'Обзор'],
+          ['health', HeartPulse, 'Здоровье'],
           ['users', Users, 'Пользователи'],
           ['whitelist', Mail, 'Whitelist'],
           ['channels', Tv2, 'Все каналы'],
@@ -67,6 +69,7 @@ export function AdminPanel() {
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
         {tab === 'overview' && <Overview />}
+        {tab === 'health' && <HealthTab />}
         {tab === 'users' && <UsersTab />}
         {tab === 'whitelist' && <WhitelistTab />}
         {tab === 'channels' && <ChannelsTab />}
@@ -733,7 +736,7 @@ function Overview() {
             }}>
               <span style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.2)', minWidth: '16px' }}>#{i + 1}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.username}</div>
+                <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><ChatterName channel={u.channel_name} name={u.username}>{u.username}</ChatterName></div>
                 <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginTop: '1px' }}>📺 {u.channel_name} · {u.flagged_count} флагов</div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -1254,7 +1257,7 @@ function LogsTab() {
 
               {/* Target user */}
               <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.88)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {l.username}
+                <ChatterName channel={l.channel_name} name={l.username}>{l.username}</ChatterName>
               </div>
 
               {/* Moderator */}
@@ -1499,7 +1502,7 @@ function BansTab() {
             {/* Banned user */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ff4444', flexShrink: 0 }} />
-              <span style={{ fontWeight: 600, fontSize: '13px', color: 'rgba(255,255,255,0.9)' }}>{b.username}</span>
+              <span style={{ fontWeight: 600, fontSize: '13px', color: 'rgba(255,255,255,0.9)' }}><ChatterName channel={b.channel_name} name={b.username}>{b.username}</ChatterName></span>
             </div>
 
             {/* Channel */}
@@ -1528,6 +1531,210 @@ function BansTab() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// SYSTEM HEALTH
+// ============================================================================
+interface HealthData {
+  env: { twitch_client_configured: boolean; bot_configured: boolean };
+  bot: { configured: boolean; state: string };
+  user_connections: { email: string; username: string; connected: boolean; channels: string[] }[];
+  channels: { name: string; irc: string; eventsub_actions: boolean; eventsub_stream: boolean }[];
+  tokens: {
+    users: { id: string; status: string; last_validated: string | null }[];
+    broadcasters: { id: string; status: string; last_validated: string | null }[];
+  };
+  recent_issues: { level: string; message: string; ts: number }[];
+  ts: number;
+}
+
+function Dot({ ok, warn }: { ok: boolean; warn?: boolean }) {
+  const color = ok ? '#00c878' : warn ? '#ffc800' : '#ff5959';
+  return <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0, boxShadow: `0 0 6px ${color}88` }} />;
+}
+
+function tokenStatusMeta(status: string): { label: string; color: string; ok: boolean; warn: boolean } {
+  if (status === 'active') return { label: 'активен', color: '#00c878', ok: true, warn: false };
+  if (status === 'reauthorization_required') return { label: 'нужна переавторизация', color: '#ff5959', ok: false, warn: false };
+  if (status === 'disconnected') return { label: 'отключён', color: 'rgba(255,255,255,0.4)', ok: false, warn: true };
+  return { label: status, color: 'rgba(255,255,255,0.5)', ok: false, warn: true };
+}
+
+function HealthTab() {
+  const [data, setData] = useState<HealthData | null>(null);
+  const [updated, setUpdated] = useState<Date | null>(null);
+
+  const load = () => api.get<HealthData>('/api/admin/health').then(d => { setData(d); setUpdated(new Date()); }).catch(console.error);
+  useEffect(() => {
+    load();
+    const i = setInterval(load, 15000);
+    return () => clearInterval(i);
+  }, []);
+
+  if (!data) return <div style={{ padding: '40px', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Загрузка...</div>;
+
+  const botOpen = data.bot.state === 'OPEN';
+  const anyReauth = [...data.tokens.users, ...data.tokens.broadcasters].some(t => t.status === 'reauthorization_required');
+  const channelsNoActions = data.channels.filter(c => !c.eventsub_actions);
+  const allGood = data.env.twitch_client_configured && botOpen && !anyReauth && channelsNoActions.length === 0;
+
+  const rel = (iso: string | null) => iso ? relativeTime(iso) : '—';
+
+  return (
+    <div style={{ maxWidth: '1000px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '16px' }}>
+        <div>
+          <h2 style={{ fontSize: '20px', fontWeight: 700, color: 'rgba(255,255,255,0.95)', marginBottom: '2px' }}>Здоровье системы</h2>
+          <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>Всё ли живо — до того, как отвалится в чате · авто 15с</p>
+        </div>
+        <button onClick={load} style={{
+          display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 12px', borderRadius: '9px', fontSize: '11px', fontWeight: 600,
+          background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.07)', cursor: 'pointer',
+        }}><RotateCcw size={11} /> Обновить</button>
+      </div>
+
+      {/* Overall banner */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px', marginBottom: '16px', borderRadius: '14px',
+        background: allGood ? 'rgba(0,200,120,0.08)' : 'rgba(255,89,89,0.08)',
+        border: `1px solid ${allGood ? 'rgba(0,200,120,0.22)' : 'rgba(255,89,89,0.22)'}`,
+      }}>
+        <HeartPulse size={20} style={{ color: allGood ? '#00c878' : '#ff5959' }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: allGood ? '#00c878' : '#ff7070' }}>
+            {allGood ? 'Всё работает' : 'Есть проблемы'}
+          </div>
+          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '2px' }}>
+            Обновлено: {updated ? updated.toLocaleTimeString() : '—'}
+          </div>
+        </div>
+      </div>
+
+      {/* Core services */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))', gap: '10px', marginBottom: '16px' }}>
+        <HealthCard icon={KeyRound} title="Twitch API" ok={data.env.twitch_client_configured}
+          lines={[
+            { label: 'CLIENT_ID / SECRET', ok: data.env.twitch_client_configured, text: data.env.twitch_client_configured ? 'заданы' : 'НЕ заданы' },
+            { label: 'Бот-токен (env)', ok: data.env.bot_configured, warn: !data.env.bot_configured, text: data.env.bot_configured ? 'задан' : 'нет' },
+          ]} />
+        <HealthCard icon={Radio} title="IRC бот" ok={botOpen} warn={!botOpen && data.bot.configured}
+          lines={[
+            { label: 'Глобальный бот', ok: botOpen, warn: !botOpen && data.bot.configured, text: data.bot.configured ? data.bot.state : 'не настроен' },
+            { label: 'Юзер-соединения', ok: data.user_connections.some(c => c.connected), warn: data.user_connections.length === 0, text: `${data.user_connections.filter(c => c.connected).length}/${data.user_connections.length} активны` },
+          ]} />
+        <HealthCard icon={ShieldCheck} title="Токены" ok={!anyReauth}
+          lines={[
+            { label: 'Пользователи', ok: !data.tokens.users.some(t => t.status === 'reauthorization_required'), text: `${data.tokens.users.length} шт.` },
+            { label: 'Broadcaster', ok: !data.tokens.broadcasters.some(t => t.status === 'reauthorization_required'), text: `${data.tokens.broadcasters.length} шт.` },
+          ]} />
+      </div>
+
+      {/* Channels */}
+      <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '16px 18px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+          <Tv2 size={13} style={{ color: '#a070ff' }} />
+          <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Каналы</span>
+          {channelsNoActions.length > 0 && (
+            <span style={{ fontSize: '10px', color: '#ff9080', marginLeft: 'auto' }}>{channelsNoActions.length} без EventSub-действий</span>
+          )}
+        </div>
+        {data.channels.length === 0 ? (
+          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>Нет каналов</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px,1fr))', gap: '8px' }}>
+            {data.channels.map(c => (
+              <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '10px', background: 'rgba(255,255,255,0.025)' }}>
+                <Dot ok={c.irc === 'connected'} warn={c.irc === 'connecting'} />
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                <span title="EventSub: действия" style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                  <Dot ok={c.eventsub_actions} />
+                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>действия</span>
+                </span>
+                <span title="EventSub: стрим" style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                  <Dot ok={c.eventsub_stream} />
+                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>стрим</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Tokens detail */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+        {([
+          { title: 'Токены пользователей', rows: data.tokens.users },
+          { title: 'Broadcaster-токены', rows: data.tokens.broadcasters },
+        ]).map(({ title, rows }) => (
+          <div key={title} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '16px 18px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: '10px' }}>{title}</div>
+            {rows.length === 0 ? (
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>Нет</div>
+            ) : rows.map(t => {
+              const m = tokenStatusMeta(t.status);
+              return (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                  <Dot ok={m.ok} warn={m.warn} />
+                  <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.8)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.id}</span>
+                  <span style={{ fontSize: '10px', color: m.color, fontWeight: 600 }}>{m.label}</span>
+                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', minWidth: '64px', textAlign: 'right' }}>{rel(t.last_validated)}</span>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* Recent issues */}
+      <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '16px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+          <AlertTriangle size={13} style={{ color: '#ff9800' }} />
+          <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Последние ошибки и предупреждения</span>
+        </div>
+        {data.recent_issues.length === 0 ? (
+          <div style={{ color: 'rgba(0,200,120,0.7)', fontSize: '12px' }}>Чисто — ошибок нет</div>
+        ) : (
+          <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
+            {data.recent_issues.map((iss, i) => (
+              <div key={i} style={{ display: 'flex', gap: '10px', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: '11px' }}>
+                <span style={{
+                  fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '5px', flexShrink: 0, height: 'fit-content',
+                  background: iss.level === 'error' ? 'rgba(255,89,89,0.12)' : 'rgba(255,152,0,0.12)',
+                  color: iss.level === 'error' ? '#ff5959' : '#ff9800',
+                }}>{iss.level === 'error' ? 'ERR' : 'WARN'}</span>
+                <span style={{ color: 'rgba(255,255,255,0.6)', flex: 1, fontFamily: 'monospace', wordBreak: 'break-word' }}>{iss.message}</span>
+                <span style={{ color: 'rgba(255,255,255,0.25)', flexShrink: 0 }}>{relativeTime(new Date(iss.ts).toISOString())}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HealthCard({ icon: Icon, title, ok, warn, lines }: {
+  icon: any; title: string; ok: boolean; warn?: boolean;
+  lines: { label: string; ok: boolean; warn?: boolean; text: string }[];
+}) {
+  const accent = ok ? '#00c878' : warn ? '#ffc800' : '#ff5959';
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '16px 18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+        <Icon size={14} style={{ color: accent }} />
+        <span style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{title}</span>
+        <span style={{ marginLeft: 'auto' }}><Dot ok={ok} warn={warn} /></span>
+      </div>
+      {lines.map(l => (
+        <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0' }}>
+          <Dot ok={l.ok} warn={l.warn} />
+          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', flex: 1 }}>{l.label}</span>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.8)' }}>{l.text}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1760,7 +1967,7 @@ function ModeratorDetail({ mod, onBack }: { mod: ModRow; onBack: () => void }) {
                 {l.channel_name}
               </div>
               <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.88)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {l.username}
+                <ChatterName channel={l.channel_name} name={l.username}>{l.username}</ChatterName>
               </div>
               <div>
                 {l.spam_score > 0 ? (

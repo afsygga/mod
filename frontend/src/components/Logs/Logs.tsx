@@ -6,6 +6,9 @@ import { api } from '../../hooks/useApi';
 import { useAuth } from '../../hooks/useAuth';
 import { T, Lang } from '../../utils/i18n';
 import { Footer } from '../Footer/Footer';
+import { ChatterName } from '../common/ChatterName';
+
+interface ContextMsg { message: string; spam_score: number; reasons: string[] | null; created_at: string; }
 
 const ACTION_STYLES: Record<string, { bg: string; color: string; icon: any; label: string; labelEn: string }> = {
   MUTED:      { bg: 'rgba(255,200,0,0.1)',   color: '#ffc800', icon: Volume2,        label: 'Мут',   labelEn: 'Mute' },
@@ -58,6 +61,8 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [unbanning, setUnbanning] = useState<Record<number, 'loading' | 'done'>>({});
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [context, setContext] = useState<Record<number, ContextMsg[] | 'loading'>>({});
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const t = T[lang];
@@ -201,6 +206,18 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
       }
     } catch (err) { console.error(err); }
     setConfirmDelete(null);
+  };
+
+  // Toggle a row open and lazy-load the user's recent messages before the action
+  const toggleContext = (log: ModerationLog) => {
+    if (expanded === log.id) { setExpanded(null); return; }
+    setExpanded(log.id);
+    if (!context[log.id]) {
+      setContext(prev => ({ ...prev, [log.id]: 'loading' }));
+      api.get<ContextMsg[]>(`/api/logs/${log.id}/context`)
+        .then(msgs => setContext(prev => ({ ...prev, [log.id]: msgs })))
+        .catch(() => setContext(prev => ({ ...prev, [log.id]: [] })));
+    }
   };
 
   const handleUnban = async (log: ModerationLog) => {
@@ -406,16 +423,20 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
           const isAuto = log.performed_by === 'AUTO' || log.action === 'AUTO_MUTED';
           const moderator = log.performed_by_display || log.performed_by;
           const absTime = new Date(log.created_at).toLocaleString();
+          const isOpen = expanded === log.id;
           return (
-            <div key={log.id} style={{
+            <React.Fragment key={log.id}>
+            <div style={{
               display: 'grid', gridTemplateColumns: GRID, alignItems: 'center', gap: '12px',
               padding: '8px 18px',
-              borderBottom: '1px solid rgba(255,255,255,0.025)',
-              transition: 'background 0.12s',
+              borderBottom: isOpen ? 'none' : '1px solid rgba(255,255,255,0.025)',
+              background: isOpen ? 'rgba(255,255,255,0.02)' : 'transparent',
+              transition: 'background 0.12s', cursor: 'pointer',
               fontSize: '12px',
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.015)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            onClick={() => toggleContext(log)}
+            onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = 'rgba(255,255,255,0.015)'; }}
+            onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = 'transparent'; }}>
 
               {/* Time */}
               <div style={{ textAlign: 'right' }} title={absTime}>
@@ -455,7 +476,10 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
                 <User size={10} style={{ color: 'rgba(255,255,255,0.4)', flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{log.username}</span>
+                <ChatterName channel={log.channel_name} name={log.username}
+                  style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {log.username}
+                </ChatterName>
               </div>
 
               {/* Moderator */}
@@ -540,7 +564,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
 
               {/* Unban / Unmute — only for mute/ban actions */}
               {(log.action === 'MUTED' || log.action === 'AUTO_MUTED' || log.action === 'BANNED') ? (
-                <button onClick={() => handleUnban(log)} disabled={!!unbanning[log.id]} title={lang === 'ru' ? 'Снять' : 'Unban / Unmute'} style={{
+                <button onClick={e => { e.stopPropagation(); handleUnban(log); }} disabled={!!unbanning[log.id]} title={lang === 'ru' ? 'Снять' : 'Unban / Unmute'} style={{
                   padding: '4px', borderRadius: '6px', background: 'transparent',
                   border: 'none', outline: 'none',
                   cursor: unbanning[log.id] ? 'default' : 'pointer',
@@ -557,7 +581,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
 
               {/* Delete — admin only */}
               {isAdmin ? (
-                <button onClick={() => setConfirmDelete({ id: log.id })} style={{
+                <button onClick={e => { e.stopPropagation(); setConfirmDelete({ id: log.id }); }} style={{
                   padding: '4px', borderRadius: '6px', background: 'transparent',
                   border: 'none', outline: 'none', cursor: 'pointer', opacity: 0.5,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -568,6 +592,51 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
                 </button>
               ) : <div />}
             </div>
+
+            {/* Expanded: recent messages from this user before the action (#3) */}
+            {isOpen && (
+              <div style={{
+                padding: '4px 18px 12px 88px',
+                borderBottom: '1px solid rgba(255,255,255,0.025)',
+                background: 'rgba(255,255,255,0.02)',
+              }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: '6px' }}>
+                  {lang === 'ru' ? 'Последние сообщения перед действием' : 'Last messages before action'}
+                </div>
+                {context[log.id] === 'loading' && (
+                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>{lang === 'ru' ? 'Загрузка...' : 'Loading...'}</div>
+                )}
+                {Array.isArray(context[log.id]) && (context[log.id] as ContextMsg[]).length === 0 && (
+                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>{lang === 'ru' ? 'Нет сохранённых сообщений' : 'No stored messages'}</div>
+                )}
+                {Array.isArray(context[log.id]) && (context[log.id] as ContextMsg[]).map((m, i, arr) => {
+                  const last = i === arr.length - 1;
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'baseline', gap: '10px',
+                      padding: '4px 10px', borderRadius: '8px', marginBottom: '3px',
+                      background: last ? 'rgba(255,89,89,0.07)' : 'rgba(255,255,255,0.02)',
+                      border: last ? '1px solid rgba(255,89,89,0.18)' : '1px solid transparent',
+                    }}>
+                      <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace', flexShrink: 0 }}>
+                        {new Date(m.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </span>
+                      <span style={{ fontSize: '12px', color: last ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.6)', flex: 1, wordBreak: 'break-word' }}>
+                        {m.message}
+                      </span>
+                      {m.spam_score > 0 && (
+                        <span style={{
+                          fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '5px', flexShrink: 0,
+                          background: m.spam_score >= 90 ? 'rgba(255,89,89,0.14)' : m.spam_score >= 70 ? 'rgba(255,200,0,0.12)' : 'rgba(255,255,255,0.05)',
+                          color: m.spam_score >= 90 ? '#ff5959' : m.spam_score >= 70 ? '#ffc800' : 'rgba(255,255,255,0.5)',
+                        }}>{m.spam_score}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            </React.Fragment>
           );
         })}
 

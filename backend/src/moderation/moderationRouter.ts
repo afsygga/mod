@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
+import { logModerationAction } from '../utils/modLog';
 
 export const moderationRouter = Router();
 
@@ -10,12 +11,7 @@ moderationRouter.post('/mute', async (req: Request, res: Response) => {
   try {
     const tm = (global as any).twitchManager;
     if (tm) await tm.muteUser(channel, username, duration, req.user?.email || 'dashboard');
-    else {
-      await db.query(
-        'INSERT INTO moderation_logs (channel_name, username, action, duration_seconds, performed_by) VALUES ($1,$2,$3,$4,$5)',
-        [channel, username, 'MUTED', duration, 'dashboard']
-      );
-    }
+    else await logModerationAction({ channel, username, action: 'MUTED', durationSeconds: duration, performedBy: 'dashboard' });
     res.json({ success: true });
   } catch (err) {
     logger.error('POST /moderation/mute error', err);
@@ -29,12 +25,7 @@ moderationRouter.post('/ban', async (req: Request, res: Response) => {
   try {
     const tm = (global as any).twitchManager;
     if (tm) await tm.banUser(channel, username, req.user?.email || 'dashboard');
-    else {
-      await db.query(
-        'INSERT INTO moderation_logs (channel_name, username, action, performed_by) VALUES ($1,$2,$3,$4)',
-        [channel, username, 'BANNED', 'dashboard']
-      );
-    }
+    else await logModerationAction({ channel, username, action: 'BANNED', performedBy: 'dashboard' });
     res.json({ success: true });
   } catch (err) {
     logger.error('POST /moderation/ban error', err);

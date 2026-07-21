@@ -4,6 +4,7 @@ import { db } from '../database/db';
 import { broadcast } from '../websocket/wsHandler';
 import { logger } from '../utils/logger';
 import { refreshUserToken } from './twitchToken';
+import { logModerationAction } from '../utils/modLog';
 
 const EVENTSUB_URL = 'wss://eventsub.wss.twitch.tv/ws';
 const WELCOME_TIMEOUT_MS = 15_000;
@@ -584,23 +585,17 @@ export class EventSubManager {
       if (rows[0]?.email) performedByStored = rows[0].email;
     } catch {}
 
-    // Dedup: skip if the site already logged this exact action moments ago
-    const { rows: dup } = await db.query(
-      `SELECT 1 FROM moderation_logs
-       WHERE channel_name=$1 AND username=$2 AND action=$3 AND created_at > NOW() - INTERVAL '20 seconds'
-       LIMIT 1`,
-      [channel, target, logAction]
-    );
-    if (dup.length > 0) return;
-
-    await db.query(
-      'INSERT INTO moderation_logs (channel_name, username, action, performed_by, duration_seconds, message) VALUES ($1,$2,$3,$4,$5,$6)',
-      [channel, target, logAction, performedByStored, durationSeconds, message]
-    ).catch(err => logger.error('[eventsub] insert log failed', err));
-
-    broadcast(this.wss, {
-      type: 'mod_action', channel, username: target, action: logAction,
-      performed_by: performedBy, duration: durationSeconds, ts: Date.now(),
+    // Central dedup: echoes of a site action and repeat punitive actions within
+    // 5s are collapsed (see logModerationAction). Only broadcast if it counted.
+    const logged = await logModerationAction({
+      channel, username: target, action: logAction,
+      performedBy: performedByStored, durationSeconds, message,
     });
+    if (logged) {
+      broadcast(this.wss, {
+        type: 'mod_action', channel, username: target, action: logAction,
+        performed_by: performedBy, duration: durationSeconds, ts: Date.now(),
+      });
+    }
   }
 }
