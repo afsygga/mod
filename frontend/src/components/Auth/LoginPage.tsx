@@ -106,7 +106,10 @@ export function LoginPage() {
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: '40px 20px', position: 'relative',
       }}>
-        <AnimatePresence mode="wait">
+        {/* initial={false}: без входной анимации при загрузке страницы (она
+            давала полусекундное «дёргание» лого и текста); переходы между
+            логином и экраном блокировки по-прежнему анимируются */}
+        <AnimatePresence mode="wait" initial={false}>
           {!blockedEmail ? (
             <motion.div key="login"
               initial={{ opacity: 0, y: 16 }}
@@ -126,15 +129,9 @@ export function LoginPage() {
                 }} />
               <h1 style={{
                 fontSize: '28px', fontWeight: 800, color: '#ffc800',
-                letterSpacing: '-0.02em', lineHeight: 1, marginBottom: '8px',
+                letterSpacing: '-0.02em', lineHeight: 1, marginBottom: '36px',
                 textShadow: '0 0 36px rgba(255,200,0,0.35)',
               }}>afsyg.gay</h1>
-              <p style={{
-                fontSize: '13px', color: 'rgba(255,255,255,0.4)',
-                letterSpacing: '0.02em', marginBottom: '40px',
-              }}>
-                Smart Twitch Moderation
-              </p>
 
               {/* Единственное действие — вход через Google-почту */}
               <div style={{
