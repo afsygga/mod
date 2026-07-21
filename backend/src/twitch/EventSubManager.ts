@@ -587,11 +587,11 @@ export class EventSubManager {
 
     // Central dedup: echoes of a site action and repeat punitive actions within
     // 5s are collapsed (see logModerationAction). Only broadcast if it counted.
-    const logged = await logModerationAction({
+    const r = await logModerationAction({
       channel, username: target, action: logAction,
       performedBy: performedByStored, durationSeconds, message,
     });
-    if (logged) {
+    if (r === 'primary') {
       broadcast(this.wss, {
         type: 'mod_action', channel, username: target, action: logAction,
         performed_by: performedBy, duration: durationSeconds, ts: Date.now(),

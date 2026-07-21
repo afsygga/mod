@@ -9,6 +9,8 @@ import { Footer } from '../Footer/Footer';
 import { ChatterName } from '../common/ChatterName';
 
 interface ContextMsg { message: string; spam_score: number; reasons: string[] | null; created_at: string; }
+interface CoActor { action: string; duration_seconds: number | null; created_at: string; performed_by: string; }
+interface LogContext { messages: ContextMsg[]; co_actors: CoActor[]; }
 
 const ACTION_STYLES: Record<string, { bg: string; color: string; icon: any; label: string; labelEn: string }> = {
   MUTED:      { bg: 'rgba(255,200,0,0.1)',   color: '#ffc800', icon: Volume2,        label: 'Мут',   labelEn: 'Mute' },
@@ -62,7 +64,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [unbanning, setUnbanning] = useState<Record<number, 'loading' | 'done'>>({});
   const [expanded, setExpanded] = useState<number | null>(null);
-  const [context, setContext] = useState<Record<number, ContextMsg[] | 'loading'>>({});
+  const [context, setContext] = useState<Record<number, LogContext | 'loading'>>({});
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const t = T[lang];
@@ -214,9 +216,9 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
     setExpanded(log.id);
     if (!context[log.id]) {
       setContext(prev => ({ ...prev, [log.id]: 'loading' }));
-      api.get<ContextMsg[]>(`/api/logs/${log.id}/context`)
-        .then(msgs => setContext(prev => ({ ...prev, [log.id]: msgs })))
-        .catch(() => setContext(prev => ({ ...prev, [log.id]: [] })));
+      api.get<LogContext>(`/api/logs/${log.id}/context`)
+        .then(ctx => setContext(prev => ({ ...prev, [log.id]: ctx })))
+        .catch(() => setContext(prev => ({ ...prev, [log.id]: { messages: [], co_actors: [] } })));
     }
   };
 
@@ -593,49 +595,88 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
               ) : <div />}
             </div>
 
-            {/* Expanded: recent messages from this user before the action (#3) */}
-            {isOpen && (
-              <div style={{
-                padding: '4px 18px 12px 88px',
-                borderBottom: '1px solid rgba(255,255,255,0.025)',
-                background: 'rgba(255,255,255,0.02)',
-              }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: '6px' }}>
-                  {lang === 'ru' ? 'Последние сообщения перед действием' : 'Last messages before action'}
-                </div>
-                {context[log.id] === 'loading' && (
-                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>{lang === 'ru' ? 'Загрузка...' : 'Loading...'}</div>
-                )}
-                {Array.isArray(context[log.id]) && (context[log.id] as ContextMsg[]).length === 0 && (
-                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>{lang === 'ru' ? 'Нет сохранённых сообщений' : 'No stored messages'}</div>
-                )}
-                {Array.isArray(context[log.id]) && (context[log.id] as ContextMsg[]).map((m, i, arr) => {
-                  const last = i === arr.length - 1;
-                  return (
-                    <div key={i} style={{
-                      display: 'flex', alignItems: 'baseline', gap: '10px',
-                      padding: '4px 10px', borderRadius: '8px', marginBottom: '3px',
-                      background: last ? 'rgba(255,89,89,0.07)' : 'rgba(255,255,255,0.02)',
-                      border: last ? '1px solid rgba(255,89,89,0.18)' : '1px solid transparent',
-                    }}>
-                      <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace', flexShrink: 0 }}>
-                        {new Date(m.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </span>
-                      <span style={{ fontSize: '12px', color: last ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.6)', flex: 1, wordBreak: 'break-word' }}>
-                        {m.message}
-                      </span>
-                      {m.spam_score > 0 && (
-                        <span style={{
-                          fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '5px', flexShrink: 0,
-                          background: m.spam_score >= 90 ? 'rgba(255,89,89,0.14)' : m.spam_score >= 70 ? 'rgba(255,200,0,0.12)' : 'rgba(255,255,255,0.05)',
-                          color: m.spam_score >= 90 ? '#ff5959' : m.spam_score >= 70 ? '#ffc800' : 'rgba(255,255,255,0.5)',
-                        }}>{m.spam_score}</span>
-                      )}
+            {/* Expanded: pile-on mods (#2) + recent messages before the action (#3) */}
+            {isOpen && (() => {
+              const ctx = context[log.id];
+              const loading = ctx === 'loading';
+              const data = (loading || !ctx) ? null : ctx as LogContext;
+              const co = data?.co_actors || [];
+              const msgs = data?.messages || [];
+              return (
+                <div style={{
+                  padding: '6px 18px 12px 88px',
+                  borderBottom: '1px solid rgba(255,255,255,0.025)',
+                  background: 'rgba(255,255,255,0.02)',
+                }}>
+                  {loading && (
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>{lang === 'ru' ? 'Загрузка...' : 'Loading...'}</div>
+                  )}
+
+                  {/* Additional moderators who also actioned this user within 5s */}
+                  {co.length > 0 && (
+                    <div style={{ marginBottom: '10px' }}>
+                      <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: '6px' }}>
+                        {lang === 'ru' ? 'Также замутили (в течение 5с)' : 'Also actioned (within 5s)'}
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {co.map((a, i) => {
+                          const st = ACTION_STYLES[a.action] || { bg: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.5)', label: a.action, labelEn: a.action };
+                          return (
+                            <span key={i} style={{
+                              display: 'inline-flex', alignItems: 'center', gap: '6px',
+                              padding: '4px 9px', borderRadius: '999px',
+                              background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+                              fontSize: '11px',
+                            }}>
+                              <span style={{ fontWeight: 700, color: 'rgba(255,255,255,0.85)' }}>{a.performed_by}</span>
+                              <span style={{ fontSize: '9px', fontWeight: 700, color: st.color }}>{lang === 'ru' ? st.label : st.labelEn}{a.duration_seconds ? ` ${formatDuration(a.duration_seconds)}` : ''}</span>
+                              <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>
+                                {new Date(a.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              </span>
+                            </span>
+                          );
+                        })}
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  )}
+
+                  {/* Recent messages before the action */}
+                  {!loading && (
+                    <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: '6px' }}>
+                      {lang === 'ru' ? 'Последние сообщения перед действием' : 'Last messages before action'}
+                    </div>
+                  )}
+                  {!loading && msgs.length === 0 && (
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>{lang === 'ru' ? 'Нет сохранённых сообщений' : 'No stored messages'}</div>
+                  )}
+                  {msgs.map((m, i) => {
+                    const last = i === msgs.length - 1;
+                    return (
+                      <div key={i} style={{
+                        display: 'flex', alignItems: 'baseline', gap: '10px',
+                        padding: '4px 10px', borderRadius: '8px', marginBottom: '3px',
+                        background: last ? 'rgba(255,89,89,0.07)' : 'rgba(255,255,255,0.02)',
+                        border: last ? '1px solid rgba(255,89,89,0.18)' : '1px solid transparent',
+                      }}>
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace', flexShrink: 0 }}>
+                          {new Date(m.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                        <span style={{ fontSize: '12px', color: last ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.6)', flex: 1, wordBreak: 'break-word' }}>
+                          {m.message}
+                        </span>
+                        {m.spam_score > 0 && (
+                          <span style={{
+                            fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '5px', flexShrink: 0,
+                            background: m.spam_score >= 90 ? 'rgba(255,89,89,0.14)' : m.spam_score >= 70 ? 'rgba(255,200,0,0.12)' : 'rgba(255,255,255,0.05)',
+                            color: m.spam_score >= 90 ? '#ff5959' : m.spam_score >= 70 ? '#ffc800' : 'rgba(255,255,255,0.5)',
+                          }}>{m.spam_score}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
             </React.Fragment>
           );
         })}

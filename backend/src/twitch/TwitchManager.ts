@@ -1078,11 +1078,13 @@ export class TwitchManager {
       logger.error(`muteUser error: ${err?.message}`);
     }
 
-    // Dedup: a repeat mute/ban of the same user within 5s is not counted again.
-    const logged = await logModerationAction({
+    // Only the primary (first) mute of an incident bumps the user's mute_count
+    // and broadcasts; pile-on mutes within 5s are logged as secondary (counted
+    // in per-mod stats only), later repeats are skipped.
+    const r = await logModerationAction({
       channel: channelName, username, action: 'MUTED', performedBy, durationSeconds,
     });
-    if (logged) {
+    if (r === 'primary') {
       await db.query(
         'UPDATE user_profiles SET mute_count = mute_count + 1 WHERE username=$1 AND channel_name=$2',
         [username, channelName]
@@ -1122,10 +1124,10 @@ export class TwitchManager {
       logger.error(`banUser error: ${err?.message}`);
     }
 
-    const logged = await logModerationAction({
+    const r = await logModerationAction({
       channel: channelName, username, action: 'BANNED', performedBy,
     });
-    if (logged) broadcast(this.wss, { type: 'user_banned', channel: channelName, username });
+    if (r === 'primary') broadcast(this.wss, { type: 'user_banned', channel: channelName, username });
   }
 
   async unbanUser(channelName: string, username: string, performedBy: string): Promise<void> {

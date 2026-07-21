@@ -2,6 +2,8 @@ import { db } from '../database/db';
 import { logger } from './logger';
 
 const PUNITIVE = new Set(['MUTED', 'AUTO_MUTED', 'BANNED']);
+// Пул действий, которые пилят одного юзера в течение одного инцидента
+const PILE_ON_WINDOW_SEC = 5;
 
 export interface ModLogEntry {
   channel: string;
@@ -13,68 +15,82 @@ export interface ModLogEntry {
 }
 
 /**
- * Insert a moderation action into moderation_logs with deduplication.
- * Returns true if the row was inserted, false if skipped as a duplicate — so
- * callers know whether to also bump counters / broadcast (skipped = not counted
- * anywhere, per product rule).
- *
- * Rule: a mute/ban of a user who is ALREADY under an active punishment doesn't
- * count. "Already punished" means the previous timeout hasn't expired yet
- * (created_at + its duration is still in the future) or the user is banned and
- * hasn't been unbanned since. So if one mod mutes someone and another mod
- * mutes/bans the same person 5 seconds — or a minute — later while the first
- * timeout is still running, only the first counts. Once the timeout expires (or
- * an unban happens), a fresh mute counts again. This also absorbs the EventSub
- * echo of a site action. UNBANNED is de-duped only against its own echo (15s);
- * FLAGGED (message deletes) is never de-duped — each delete is a distinct event.
+ * primary   — a normal, standalone log row (first action of an incident, or a
+ *             fresh action after the previous one expired). Counts everywhere,
+ *             shown in the log list, bumps the user's mute_count, broadcasts.
+ * secondary — another mod piling on the SAME user within 5s of the primary. The
+ *             row IS inserted (so the mod gets credit in per-moderator stats),
+ *             but linked to the primary (primary_id) so it doesn't show as its
+ *             own log line — it appears under the primary when expanded. No
+ *             mute_count bump, no live broadcast.
+ * skipped   — not counted at all: a repeat past the 5s window while the user is
+ *             still muted/banned, or the echo of an unban.
  */
-export async function logModerationAction(e: ModLogEntry): Promise<boolean> {
+export type ModLogResult = 'primary' | 'secondary' | 'skipped';
+
+async function insertRow(e: ModLogEntry, primaryId: number | null): Promise<number | null> {
   try {
-    if (PUNITIVE.has(e.action)) {
+    const { rows } = await db.query(
+      `INSERT INTO moderation_logs (channel_name, username, action, performed_by, duration_seconds, message, primary_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [e.channel, e.username, e.action, e.performedBy, e.durationSeconds ?? null, e.message ?? null, primaryId]
+    );
+    return rows[0]?.id ?? null;
+  } catch (err: any) {
+    logger.error(`[modlog] insert failed: ${err?.message || err}`);
+    return null;
+  }
+}
+
+export async function logModerationAction(e: ModLogEntry): Promise<ModLogResult> {
+  if (PUNITIVE.has(e.action)) {
+    try {
+      // Anchor on the most recent PRIMARY punitive/unban row for this user.
       const { rows } = await db.query(
-        `SELECT action, duration_seconds,
+        `SELECT id, action, duration_seconds,
                 EXTRACT(EPOCH FROM (NOW() - created_at)) AS age_sec
          FROM moderation_logs
          WHERE channel_name=$1 AND LOWER(username)=LOWER($2)
            AND action IN ('MUTED','AUTO_MUTED','BANNED','UNBANNED')
+           AND primary_id IS NULL
          ORDER BY created_at DESC LIMIT 1`,
         [e.channel, e.username]
       );
       const last = rows[0];
       if (last && last.action !== 'UNBANNED') {
-        let active: boolean;
-        if (last.action === 'BANNED') {
-          active = true; // banned until an explicit unban
-        } else {
-          // timeout still running? fall back to 60s if duration is unknown
-          const dur = Number(last.duration_seconds) || 60;
-          active = Number(last.age_sec) < dur;
+        const age = Number(last.age_sec);
+        if (age <= PILE_ON_WINDOW_SEC) {
+          // Pile-on within 5s → secondary (counts in per-mod stats, grouped).
+          await insertRow(e, last.id);
+          return 'secondary';
         }
-        if (active) return false; // already punished — this repeat doesn't count
+        // Past the 5s window: if the user is still punished, this repeat is
+        // redundant and not counted; if the previous timeout already expired,
+        // fall through and start a new primary incident.
+        let active: boolean;
+        if (last.action === 'BANNED') active = true;
+        else { const dur = Number(last.duration_seconds) || 60; active = age < dur; }
+        if (active) return 'skipped';
       }
-    } else if (e.action === 'UNBANNED') {
-      // echo of a site unban (site action + EventSub notification of the same)
+    } catch (err: any) {
+      logger.warn(`[modlog] dedup check failed: ${err?.message || err}`);
+    }
+    await insertRow(e, null);
+    return 'primary';
+  }
+
+  if (e.action === 'UNBANNED') {
+    try {
       const { rows } = await db.query(
         `SELECT 1 FROM moderation_logs
          WHERE channel_name=$1 AND LOWER(username)=LOWER($2) AND action='UNBANNED'
            AND created_at > NOW() - INTERVAL '15 seconds' LIMIT 1`,
         [e.channel, e.username]
       );
-      if (rows.length > 0) return false;
-    }
-  } catch (err: any) {
-    // On a dedup-check failure, prefer logging the action over losing it.
-    logger.warn(`[modlog] dedup check failed: ${err?.message || err}`);
+      if (rows.length > 0) return 'skipped';
+    } catch { /* fall through and insert */ }
   }
 
-  try {
-    await db.query(
-      'INSERT INTO moderation_logs (channel_name, username, action, performed_by, duration_seconds, message) VALUES ($1,$2,$3,$4,$5,$6)',
-      [e.channel, e.username, e.action, e.performedBy, e.durationSeconds ?? null, e.message ?? null]
-    );
-    return true;
-  } catch (err: any) {
-    logger.error(`[modlog] insert failed: ${err?.message || err}`);
-    return false;
-  }
+  await insertRow(e, null);
+  return 'primary';
 }

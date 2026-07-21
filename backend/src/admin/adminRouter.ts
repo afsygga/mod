@@ -221,11 +221,15 @@ adminRouter.get('/logs', async (req: Request, res: Response) => {
   const params: any[] = [];
   let where = '';
   if (moderator) {
+    // Per-moderator view: show ALL of their actions incl. secondary pile-ons.
     // performed_by is a site email or a Twitch login; match either the login
     // directly or the email of the user whose twitch_username is that login.
     const p = params.push(moderator);
     where = `WHERE (ml.performed_by = $${p}
              OR ml.performed_by IN (SELECT email FROM users WHERE LOWER(twitch_username)=LOWER($${p})))`;
+  } else {
+    // General list: only primary rows (secondary pile-ons are grouped away).
+    where = 'WHERE ml.primary_id IS NULL';
   }
   const limitP = params.push(limit);
   const { rows } = await db.query(

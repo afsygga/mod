@@ -19,7 +19,7 @@ logsRouter.get('/', async (req: Request, res: Response) => {
              COALESCE(u.twitch_username, u.name, ml.performed_by) AS performed_by_display
       FROM moderation_logs ml
       LEFT JOIN users u ON u.email = ml.performed_by
-      WHERE 1=1`;
+      WHERE ml.primary_id IS NULL`;
     const params: any[] = [];
     if (!isAdmin) {
       const owned = await getOwnedChannels(req.user?.email);
@@ -56,14 +56,26 @@ logsRouter.get('/:id/context', async (req: Request, res: Response) => {
       const owned = await getOwnedChannels(req.user?.email);
       if (!owned.includes(log.channel_name)) return res.status(403).json({ error: 'forbidden' });
     }
-    const { rows } = await db.query(
-      `SELECT message, spam_score, reasons, created_at
-       FROM messages
-       WHERE channel_name=$1 AND LOWER(username)=LOWER($2) AND created_at <= $3
-       ORDER BY created_at DESC LIMIT 8`,
-      [log.channel_name, log.username, log.created_at]
-    );
-    res.json(rows.reverse()); // chronological (oldest → the message that got them muted)
+    const [{ rows: messages }, { rows: coActors }] = await Promise.all([
+      db.query(
+        `SELECT message, spam_score, reasons, created_at
+         FROM messages
+         WHERE channel_name=$1 AND LOWER(username)=LOWER($2) AND created_at <= $3
+         ORDER BY created_at DESC LIMIT 8`,
+        [log.channel_name, log.username, log.created_at]
+      ),
+      // Pile-on mods who also actioned this user within 5s (secondary rows).
+      db.query(
+        `SELECT ml.action, ml.duration_seconds, ml.created_at,
+                COALESCE(u.twitch_username, u.name, ml.performed_by) AS performed_by
+         FROM moderation_logs ml
+         LEFT JOIN users u ON u.email = ml.performed_by
+         WHERE ml.primary_id=$1
+         ORDER BY ml.created_at ASC`,
+        [id]
+      ),
+    ]);
+    res.json({ messages: messages.reverse(), co_actors: coActors });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

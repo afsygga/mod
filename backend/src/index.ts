@@ -194,6 +194,12 @@ async function runMigrations() {
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS twitch_last_validated TIMESTAMPTZ`);
     await db.query(`ALTER TABLE broadcaster_tokens ADD COLUMN IF NOT EXISTS auth_status VARCHAR(32) DEFAULT 'active'`);
     await db.query(`ALTER TABLE broadcaster_tokens ADD COLUMN IF NOT EXISTS last_validated TIMESTAMPTZ`);
+    // Pile-on mutes: a 2nd+ mod muting the same user within 5s of the first is a
+    // "secondary" action — counts in per-mod stats but is grouped under the
+    // primary log row (primary_id → the primary row's id) instead of showing
+    // as its own line.
+    await db.query(`ALTER TABLE moderation_logs ADD COLUMN IF NOT EXISTS primary_id INTEGER`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_logs_primary ON moderation_logs(primary_id)`);
     // One-time clean slate: wipe old stream history + chat messages so backend
     // tracking starts fresh from 2026-07-01. Guarded by a flag so it runs once.
     const { rows: resetFlag } = await db.query("SELECT 1 FROM settings WHERE key='reset_streams_2026_07_01'");
