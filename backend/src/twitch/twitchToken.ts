@@ -3,25 +3,37 @@ import { logger } from '../utils/logger';
 
 /**
  * Twitch user access tokens expire (~4h). We store the refresh_token and use it
- * to mint a fresh access token when a Helix call returns 401. These helpers
- * refresh + persist the new tokens and return the raw access token.
+ * to mint a fresh access token when a Helix/IRC call returns 401. These helpers
+ * refresh + persist the new pair and return the raw access token.
  *
- * Refreshes are single-flight per account: EventSub reconcile, the stream
- * poller and mute/ban 401-retries all hit the refresh at the same moment the
- * token expires. Twitch rotates the refresh token on every use, and a
- * concurrent second request with the already-used refresh token trips reuse
- * detection — Twitch may revoke the whole grant, killing the account's tokens
- * until the user re-authorizes. Serializing the calls eliminates that race.
+ * Correctness rules (see TWITCH_OAUTH_BUG_REPORT):
+ *  - Twitch rotates the refresh_token on every use; the NEW pair is only valid
+ *    once it is durably written. So a refresh is "successful" ONLY after an
+ *    UPDATE that affected exactly one row — otherwise we discard the access,
+ *    do NOT set the cooldown and do NOT log success (BUG-03/04/08).
+ *  - The token response is validated before we touch the DB: access_token and
+ *    refresh_token must both be non-empty strings (BUG-14).
+ *  - A confirmed invalid refresh (400/401) is permanent — it marks the account
+ *    reauthorization-required and stops background refresh spam until the user
+ *    re-authorizes; temporary failures (429/5xx/network) keep the pair intact
+ *    and allow a later retry (BUG-13).
+ *  - Refreshes are single-flight per account with a 60s cooldown to avoid
+ *    concurrent reuse of an already-rotated refresh token (reuse detection).
  */
 
 const inFlight = new Map<string, Promise<string | null>>();
 const lastRefreshAt = new Map<string, number>();
+const reauthRequired = new Set<string>();
 const REFRESH_COOLDOWN_MS = 60_000;
 
-async function doRefresh(refreshToken: string): Promise<{ access: string; refresh: string } | null> {
+type RefreshResult =
+  | { ok: true; access: string; refresh: string }
+  | { ok: false; kind: 'invalid' | 'temporary' };
+
+async function doRefresh(refreshToken: string): Promise<RefreshResult> {
   const clientId = process.env.TWITCH_CLIENT_ID || '';
   const clientSecret = process.env.TWITCH_CLIENT_SECRET || '';
-  if (!clientId || !clientSecret || !refreshToken) return null;
+  if (!clientId || !clientSecret || !refreshToken) return { ok: false, kind: 'temporary' };
   try {
     const res = await fetch('https://id.twitch.tv/oauth2/token', {
       method: 'POST',
@@ -34,14 +46,24 @@ async function doRefresh(refreshToken: string): Promise<{ access: string; refres
       }),
     });
     if (!res.ok) {
-      logger.warn(`[token] refresh failed ${res.status}: ${await res.text().catch(() => '')}`);
-      return null;
+      // 400/401 = the refresh token itself is bad → permanent, needs re-auth.
+      // 429/5xx = Twitch transient → keep the pair, retry later.
+      const kind: 'invalid' | 'temporary' = (res.status === 400 || res.status === 401) ? 'invalid' : 'temporary';
+      logger.warn(`[token] refresh failed ${res.status} (${kind})`);
+      return { ok: false, kind };
     }
-    const d: any = await res.json();
-    return { access: d.access_token, refresh: d.refresh_token || refreshToken };
+    const d: any = await res.json().catch(() => null);
+    // BUG-14: validate the response before trusting it. Twitch always returns a
+    // (rotated) refresh_token on the refresh grant; its absence is malformed.
+    if (!d || typeof d.access_token !== 'string' || d.access_token.length === 0 ||
+        typeof d.refresh_token !== 'string' || d.refresh_token.length === 0) {
+      logger.error('[token] refresh response malformed (missing/empty tokens)');
+      return { ok: false, kind: 'temporary' };
+    }
+    return { ok: true, access: d.access_token, refresh: d.refresh_token };
   } catch (err: any) {
     logger.error('[token] refresh threw', err?.message || err);
-    return null;
+    return { ok: false, kind: 'temporary' };
   }
 }
 
@@ -53,26 +75,63 @@ function singleFlight(key: string, refresh: () => Promise<string | null>): Promi
   return p;
 }
 
+/** Whether the account's refresh token is known-invalid (needs re-auth). */
+export function isUserReauthRequired(email: string): boolean { return reauthRequired.has(`u:${email}`); }
+export function isBroadcasterReauthRequired(login: string): boolean { return reauthRequired.has(`b:${login}`); }
+/** Clear the reauth flag — call after a fresh OAuth callback / manual save. */
+export function clearUserReauth(email: string): void { reauthRequired.delete(`u:${email}`); }
+export function clearBroadcasterReauth(login: string): void { reauthRequired.delete(`b:${login.toLowerCase()}`); }
+
 /** Refresh a site user's Twitch token by email. Returns the new raw access token. */
 export async function refreshUserToken(email: string | null): Promise<string | null> {
   if (!email) return null;
-  return singleFlight(`u:${email}`, async () => {
-    // A concurrent caller refreshed moments ago (its 401 was with the old
-    // token) — hand back the already-stored fresh token instead of burning
-    // another refresh.
-    if (Date.now() - (lastRefreshAt.get(`u:${email}`) || 0) < REFRESH_COOLDOWN_MS) {
+  const key = `u:${email}`;
+  return singleFlight(key, async () => {
+    // A concurrent caller refreshed successfully moments ago — hand back the
+    // already-stored fresh token instead of burning another refresh. The
+    // cooldown is only ever set after a CONFIRMED persist (below), so this
+    // can never serve an unsaved token.
+    if (Date.now() - (lastRefreshAt.get(key) || 0) < REFRESH_COOLDOWN_MS) {
       const { rows } = await db.query('SELECT twitch_oauth FROM users WHERE email=$1', [email]);
       const t = rows[0]?.twitch_oauth;
       return t ? String(t).replace(/^oauth:/, '') : null;
     }
+    // Don't hammer a grant we already know is dead — wait for re-auth.
+    if (reauthRequired.has(key)) return null;
+
     const { rows } = await db.query('SELECT twitch_refresh FROM users WHERE email=$1', [email]);
     const refresh = rows[0]?.twitch_refresh;
     if (!refresh) return null;
+
     const r = await doRefresh(refresh);
-    if (!r) return null;
-    await db.query('UPDATE users SET twitch_oauth=$1, twitch_refresh=$2 WHERE email=$3',
-      [`oauth:${r.access}`, r.refresh, email]).catch(() => {});
-    lastRefreshAt.set(`u:${email}`, Date.now());
+    if (!r.ok) {
+      if (r.kind === 'invalid') {
+        reauthRequired.add(key);
+        logger.warn(`[token] user ${email}: refresh token invalid — reauthorization required`);
+      }
+      return null; // temporary: no cooldown, caller may retry later
+    }
+
+    // Persist the NEW pair. Success requires exactly one row updated; anything
+    // else (DB error, user deleted mid-flight, rowCount 0) means the new pair
+    // is NOT saved, so we must not report success or set the cooldown.
+    let rowCount: number | null = null;
+    try {
+      const upd = await db.query(
+        'UPDATE users SET twitch_oauth=$1, twitch_refresh=$2 WHERE email=$3',
+        [`oauth:${r.access}`, r.refresh, email]
+      );
+      rowCount = upd.rowCount;
+    } catch (e: any) {
+      logger.error(`[token] user ${email}: refresh persist FAILED (${e?.message || e}) — discarding new token`);
+      return null;
+    }
+    if (rowCount !== 1) {
+      logger.error(`[token] user ${email}: refresh not persisted (rowCount=${rowCount}) — discarding new token`);
+      return null;
+    }
+    lastRefreshAt.set(key, Date.now());
+    reauthRequired.delete(key);
     logger.info(`[token] refreshed user token for ${email}`);
     return r.access;
   });
@@ -80,19 +139,44 @@ export async function refreshUserToken(email: string | null): Promise<string | n
 
 /** Refresh a broadcaster token by twitch login. Returns the new raw access token. */
 export async function refreshBroadcasterToken(login: string): Promise<string | null> {
-  return singleFlight(`b:${login}`, async () => {
-    if (Date.now() - (lastRefreshAt.get(`b:${login}`) || 0) < REFRESH_COOLDOWN_MS) {
+  const key = `b:${login.toLowerCase()}`;
+  return singleFlight(key, async () => {
+    if (Date.now() - (lastRefreshAt.get(key) || 0) < REFRESH_COOLDOWN_MS) {
       const { rows } = await db.query('SELECT access_token FROM broadcaster_tokens WHERE twitch_login=$1', [login]);
       return rows[0]?.access_token || null;
     }
+    if (reauthRequired.has(key)) return null;
+
     const { rows } = await db.query('SELECT refresh_token FROM broadcaster_tokens WHERE twitch_login=$1', [login]);
     const refresh = rows[0]?.refresh_token;
     if (!refresh) return null;
+
     const r = await doRefresh(refresh);
-    if (!r) return null;
-    await db.query('UPDATE broadcaster_tokens SET access_token=$1, refresh_token=$2, updated_at=NOW() WHERE twitch_login=$3',
-      [r.access, r.refresh, login]).catch(() => {});
-    lastRefreshAt.set(`b:${login}`, Date.now());
+    if (!r.ok) {
+      if (r.kind === 'invalid') {
+        reauthRequired.add(key);
+        logger.warn(`[token] broadcaster ${login}: refresh token invalid — reauthorization required`);
+      }
+      return null;
+    }
+
+    let rowCount: number | null = null;
+    try {
+      const upd = await db.query(
+        'UPDATE broadcaster_tokens SET access_token=$1, refresh_token=$2, updated_at=NOW() WHERE twitch_login=$3',
+        [r.access, r.refresh, login]
+      );
+      rowCount = upd.rowCount;
+    } catch (e: any) {
+      logger.error(`[token] broadcaster ${login}: refresh persist FAILED (${e?.message || e}) — discarding new token`);
+      return null;
+    }
+    if (rowCount !== 1) {
+      logger.error(`[token] broadcaster ${login}: refresh not persisted (rowCount=${rowCount}) — discarding new token`);
+      return null;
+    }
+    lastRefreshAt.set(key, Date.now());
+    reauthRequired.delete(key);
     logger.info(`[token] refreshed broadcaster token for ${login}`);
     return r.access;
   });

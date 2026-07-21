@@ -2,8 +2,24 @@ import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
 import { authenticate } from './authMiddleware';
 import { logger } from '../utils/logger';
+import { clearUserReauth } from '../twitch/twitchToken';
 
 export const twitchCredsRouter = Router();
+
+/** Best-effort revoke of an access token at Twitch. Never throws. */
+async function revokeAccessToken(rawToken: string): Promise<void> {
+  const clientId = process.env.TWITCH_CLIENT_ID || '';
+  if (!clientId || !rawToken) return;
+  try {
+    await fetch('https://id.twitch.tv/oauth2/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: clientId, token: rawToken }),
+    });
+  } catch (err: any) {
+    logger.warn(`[creds] token revoke failed: ${err?.message || err}`);
+  }
+}
 
 twitchCredsRouter.use(authenticate);
 
@@ -54,10 +70,14 @@ twitchCredsRouter.put('/', async (req: Request, res: Response) => {
   }
 
   const email = req.user!.email;
+  // BUG-01: a manually-supplied access token is a NEW authorization — the old
+  // refresh token belongs to a different grant and must not survive, or a
+  // background refresh would overwrite the manual access with the old pair.
   await db.query(
-    'UPDATE users SET twitch_username=$1, twitch_oauth=$2 WHERE email=$3',
+    'UPDATE users SET twitch_username=$1, twitch_oauth=$2, twitch_refresh=NULL WHERE email=$3',
     [cleanUsername, cleanOauth, email]
   );
+  clearUserReauth(email);
 
   // Connect IRC for this user
   try {
@@ -124,10 +144,20 @@ twitchCredsRouter.get('/debug', async (req: Request, res: Response) => {
 });
 twitchCredsRouter.delete('/', async (req: Request, res: Response) => {
   const email = req.user!.email;
+  // Grab the current access to revoke it at Twitch before we drop it locally.
+  const { rows } = await db.query('SELECT twitch_oauth FROM users WHERE email=$1', [email]);
+  const rawToken = rows[0]?.twitch_oauth ? String(rows[0].twitch_oauth).replace(/^oauth:/, '') : '';
+  if (rawToken) await revokeAccessToken(rawToken);
+
+  // BUG-02: clear the WHOLE pair (refresh included) so no background task can
+  // resurrect the disconnected integration. Idempotent — a second DELETE is a
+  // no-op that still returns success.
   await db.query(
-    'UPDATE users SET twitch_username=NULL, twitch_oauth=NULL WHERE email=$1',
+    'UPDATE users SET twitch_username=NULL, twitch_oauth=NULL, twitch_refresh=NULL WHERE email=$1',
     [email]
   );
+  clearUserReauth(email);
+
   const tm = (global as any).twitchManager;
   if (tm) await tm.removeUserConnection(email).catch(() => {});
   res.json({ success: true });

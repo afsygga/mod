@@ -414,21 +414,29 @@ export class EventSubManager {
       let token = String(r.twitch_oauth).replace(/^oauth:/, '');
       const login = String(r.twitch_username).toLowerCase();
 
-      // Validate the token: must be alive and issued by our client id
-      let info = await this.validateToken(token);
-      if (!info || info.client_id !== clientId) {
-        // Dead or foreign token — try refreshing (only works for our own tokens)
+      // Validate the token. BUG-10: only a CONFIRMED-invalid (401) or a
+      // foreign-client token should trigger a refresh; a temporary /validate
+      // failure (429/5xx/network) must not — refreshing then would churn tokens
+      // toward Twitch's 50-token limit for no reason. On a temporary error we
+      // skip this account this round and retry on the next reconcile.
+      let v = await this.validateToken(token);
+      if (v.status === 'temporary') { continue; }
+      let info = v.info;
+      const foreign = v.status === 'valid' && info!.client_id !== clientId;
+      if (v.status === 'invalid_401' || foreign) {
         const fresh = await refreshUserToken(r.email);
         if (!fresh) {
-          if (info && info.client_id !== clientId) {
-            logger.info(`[eventsub] skip ${login}: token issued by foreign client (manual token)`);
-          }
+          if (foreign) logger.info(`[eventsub] skip ${login}: token issued by foreign client (manual token)`);
           continue;
         }
         token = fresh;
-        info = await this.validateToken(token);
-        if (!info || info.client_id !== clientId) continue;
+        v = await this.validateToken(token);
+        if (v.status !== 'valid' || v.info!.client_id !== clientId) continue;
+        info = v.info;
+      } else if (v.status !== 'valid') {
+        continue;
       }
+      if (!info) continue;
 
       const headers = { 'Client-Id': clientId, 'Authorization': `Bearer ${token}` };
       const userId = info.user_id || await this.resolveId(login, headers);
@@ -437,14 +445,21 @@ export class EventSubManager {
     return out;
   }
 
-  private async validateToken(token: string): Promise<{ client_id: string; user_id?: string; scopes?: string[] } | null> {
+  // Typed validate result so callers can tell a real invalid token apart from
+  // a transient Twitch/network hiccup (BUG-10).
+  private async validateToken(token: string): Promise<
+    | { status: 'valid'; info: { client_id: string; user_id?: string; scopes?: string[] } }
+    | { status: 'invalid_401'; info?: undefined }
+    | { status: 'temporary'; info?: undefined }
+  > {
     try {
       const r = await fetch('https://id.twitch.tv/oauth2/validate', {
         headers: { 'Authorization': `OAuth ${token}` },
       });
-      if (!r.ok) return null;
-      return await r.json() as any;
-    } catch { return null; }
+      if (r.ok) return { status: 'valid', info: await r.json() as any };
+      if (r.status === 401) return { status: 'invalid_401' };
+      return { status: 'temporary' }; // 429/5xx/other
+    } catch { return { status: 'temporary' }; }
   }
 
   /** Resolve a Twitch user id from login (cached → twitch_user_meta → Helix). */

@@ -16,6 +16,18 @@ interface UserConnection {
   connected: boolean;
 }
 
+/** Validate a raw Twitch access token, distinguishing invalid from transient. */
+async function validateAccessToken(rawToken: string): Promise<'valid' | 'invalid_401' | 'temporary'> {
+  try {
+    const r = await fetch('https://id.twitch.tv/oauth2/validate', {
+      headers: { 'Authorization': `OAuth ${rawToken}` },
+    });
+    if (r.ok) return 'valid';
+    if (r.status === 401) return 'invalid_401';
+    return 'temporary';
+  } catch { return 'temporary'; }
+}
+
 interface ChannelState {
   name: string;
   /** Email of the user whose IRC client is currently joined to this channel. */
@@ -1261,15 +1273,19 @@ export class TwitchManager {
     let ok = 0;
     for (const r of rows) {
       try {
-        let oauth: string | null = null;
-        if (r.twitch_refresh) {
+        // BUG-11: validate the stored access first; only refresh if it's
+        // actually expired (confirmed 401). A restart with a still-valid token
+        // must not mint a new one (churns toward Twitch's 50-token limit).
+        const { rows: u } = await db.query('SELECT twitch_oauth FROM users WHERE email=$1', [r.email]);
+        let oauth: string | null = u[0]?.twitch_oauth || null;
+        const raw = oauth ? String(oauth).replace(/^oauth:/, '') : '';
+        const v = raw ? await validateAccessToken(raw) : 'invalid_401';
+        if (v !== 'valid' && r.twitch_refresh) {
+          // Expired (or unknown) + we have a refresh token → refresh reactively.
+          // A temporary validate error leaves the pair intact; refreshUserToken
+          // itself no-ops on a known-invalid grant.
           const fresh = await refreshUserToken(r.email);
           if (fresh) oauth = `oauth:${fresh}`;
-        }
-        if (!oauth) {
-          // No refresh token or refresh failed — try the stored token as-is
-          const { rows: u } = await db.query('SELECT twitch_oauth FROM users WHERE email=$1', [r.email]);
-          oauth = u[0]?.twitch_oauth || null;
         }
         if (!oauth) continue;
         await this.ensureUserConnection(r.email, r.twitch_username, oauth);
