@@ -1,7 +1,7 @@
 import { db } from '../database/db';
 import { logger } from './logger';
 import { SuspicionSignal } from '../spam-engine/SpamEngine';
-import { recordSuspicionEvent, recordSuspicionBonus, setSuspiciousTracked } from './metrics';
+import { recordSuspicionEvent, setSuspiciousTracked } from './metrics';
 
 /*
  * Внешний сигнал Twitch о подозрительных аккаунтах (EventSub
@@ -117,7 +117,9 @@ export function getSuspicionSignal(channel: string, username: string): Suspicion
   // складывать их — значит наказывать дважды за одно и то же.
   const best = applicable.reduce((a, b) => (b.pts > a.pts ? b : a));
   if (best.pts <= 0) return undefined;
-  recordSuspicionBonus();
+  // Метрика применения бонуса инкрементится НЕ здесь: сигнал может вернуться и
+  // не быть применён (чистое сообщение от помеченного юзера — score 0, бонус не
+  // добавляется). Считаем реальный исход у вызывающего, по suspicionBonus (§17).
   return { points: best.pts, label: best.label };
 }
 

@@ -11,7 +11,7 @@ import { getSuspicionSignal, getSuspicionRecord } from '../utils/suspicion';
 import {
   recordChatReceived, recordChatAccepted, recordChatDropped, recordChatError,
   recordSpamDecision, recordModeration, recordAutomod, recordIrcReconnect,
-  jobStart, jobEnd,
+  recordSuspicionBonus, jobStart, jobEnd,
 } from '../utils/metrics';
 
 interface UserConnection {
@@ -296,6 +296,9 @@ export class TwitchManager {
       // Метка Twitch читается из памяти (кэш suspicion) — на горячем пути
       // сообщения БД не трогается.
       analysis = state.engine.analyze(username, message, getSuspicionSignal(channelName, username));
+      // Реальный исход: бонус применён только если движок его засчитал
+      // (на чистом сообщении score=0 и надбавки нет).
+      if ((analysis.suspicionBonus ?? 0) > 0) recordSuspicionBonus();
     } catch (err: any) {
       recordChatError();
       logger.error(`spam analyze error: ${err?.message || err}`);
