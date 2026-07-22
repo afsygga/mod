@@ -35,6 +35,7 @@ import { startTokenValidator } from './twitch/tokenValidator';
 import { register as metricsRegister, setPitProvider, setBuildInfo, setOauthSessions, Pit } from './utils/metrics';
 import { TelegramBot } from './telegram/TelegramBot';
 import { wsHandler } from './websocket/wsHandler';
+import { loadSuspicion, loadPoints } from './utils/suspicion';
 import { logger } from './utils/logger';
 
 const app = express();
@@ -218,6 +219,38 @@ async function runMigrations() {
     // as its own line.
     await db.query(`ALTER TABLE moderation_logs ADD COLUMN IF NOT EXISTS primary_id INTEGER`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_logs_primary ON moderation_logs(primary_id)`);
+    // Смены категории внутри трансляции. stream_sessions.game хранит только
+    // ТЕКУЩУЮ категорию (перезаписывается поллером), поэтому история смен
+    // теряется — здесь она копится отдельными точками.
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS stream_game_changes (
+        id SERIAL PRIMARY KEY,
+        session_id INTEGER NOT NULL,
+        channel_name VARCHAR(64) NOT NULL,
+        game VARCHAR(128),
+        changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_game_changes_session ON stream_game_changes(session_id, changed_at)`);
+    // Внешний сигнал Twitch о подозрительных юзерах (channel.suspicious_user.*).
+    // cleared_at — ручное снятие метки модератором: данные остаются, бонус к
+    // спам-скору перестаёт применяться.
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS suspicious_users (
+        channel_name VARCHAR(64) NOT NULL,
+        username VARCHAR(64) NOT NULL,
+        low_trust_status VARCHAR(32),
+        types TEXT[],
+        ban_evasion VARCHAR(16),
+        shared_ban_channels INTEGER DEFAULT 0,
+        first_seen TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        cleared_at TIMESTAMPTZ,
+        cleared_by VARCHAR(255),
+        PRIMARY KEY (channel_name, username)
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_suspicious_updated ON suspicious_users(updated_at DESC)`);
     // One-time clean slate: wipe old stream history + chat messages so backend
     // tracking starts fresh from 2026-07-01. Guarded by a flag so it runs once.
     const { rows: resetFlag } = await db.query("SELECT 1 FROM settings WHERE key='reset_streams_2026_07_01'");
@@ -261,6 +294,9 @@ async function start() {
 
     await runMigrations();
     await bootstrapAdmin();
+    // Кэш меток подозрительности — читается на каждом сообщении, поэтому
+    // поднимается в память до старта IRC.
+    await loadSuspicion();
     TelegramBot.init();
 
     httpServer.listen(PORT, () => {

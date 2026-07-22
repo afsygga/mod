@@ -37,6 +37,8 @@ const wsConnections  = C('afsyg_websocket_connections_total', 'WebSocket client 
 const dbPoolErrors   = C('afsyg_db_pool_errors_total', 'pg.Pool error events');
 const processErrors  = C('afsyg_process_unhandled_errors_total', 'Unhandled process errors', ['kind']);
 const jobRuns        = C('afsyg_background_job_runs_total', 'Completed background job runs', ['job', 'result']);
+const suspicionEvents = C('afsyg_suspicious_user_events_total', 'Twitch suspicious-user EventSub notifications', ['source']);
+const suspicionBonus  = C('afsyg_suspicion_score_bonus_applied_total', 'Messages whose spam score was raised by the Twitch suspicion signal');
 
 // ── event-driven gauges ──────────────────────────────────────────────────────
 const chatLastMessage = G('afsyg_chat_last_message_timestamp_seconds', 'Last message past routing/dedup');
@@ -46,12 +48,15 @@ const jobLastDuration = G('afsyg_background_job_last_duration_seconds', 'Duratio
 const jobInProgress   = G('afsyg_background_job_in_progress', 'Job currently running (0|1)', ['job']);
 const oauthSessions   = G('afsyg_twitch_oauth_sessions', 'OAuth sessions by status', ['kind', 'status']);
 const buildInfo       = G('afsyg_build_info', 'Build version + revision', ['version', 'revision']);
+const suspiciousUsers = G('afsyg_suspicious_users_tracked', 'Users carrying a Twitch suspicion mark', ['state']);
 
 // Zero-init known series so alert expressions have a baseline.
 (['self', 'unknown_channel', 'non_primary', 'duplicate', 'command'] as const).forEach(r => chatDropped.labels(r).inc(0));
 (['clean', 'queued', 'automod', 'whitelist_suppressed', 'role_ignored'] as const).forEach(d => spamDecisions.labels(d).inc(0));
 (['timeout', 'ban', 'unban'] as const).forEach(a => (['success', 'fallback_success', 'error'] as const).forEach(r => moderationCmds.labels(a, r).inc(0)));
 (['success', 'fallback_success', 'error'] as const).forEach(r => automodActions.labels('timeout', r).inc(0));
+(['message', 'update'] as const).forEach(s => suspicionEvents.labels(s).inc(0));
+(['flagged', 'cleared'] as const).forEach(s => suspiciousUsers.labels(s).set(0));
 
 // ── point-in-time gauges (filled by a provider on scrape) ────────────────────
 export interface Pit {
@@ -136,6 +141,12 @@ export const recordWsOpen = () => wsConnections.labels('opened').inc();
 export const recordWsClose = () => wsConnections.labels('closed').inc();
 export const recordUnhandled = (kind: 'unhandled_rejection' | 'uncaught_exception') => processErrors.labels(kind).inc();
 export const recordDbPoolError = () => dbPoolErrors.inc();
+export const recordSuspicionEvent = (source: 'message' | 'update') => suspicionEvents.labels(source).inc();
+export const recordSuspicionBonus = () => suspicionBonus.inc();
+export function setSuspiciousTracked(flagged: number, cleared: number): void {
+  suspiciousUsers.labels('flagged').set(flagged);
+  suspiciousUsers.labels('cleared').set(cleared);
+}
 
 export function jobStart(name: string): number { jobInProgress.labels(name).set(1); return Date.now(); }
 export function jobEnd(name: string, result: 'success' | 'partial' | 'error', startedAt: number): void {

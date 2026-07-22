@@ -6,6 +6,7 @@ import { logger } from '../utils/logger';
 import { refreshUserToken } from './twitchToken';
 import { logModerationAction } from '../utils/modLog';
 import { recordEventsubReconnect, recordEventsubRevocation, jobStart, jobEnd } from '../utils/metrics';
+import { applySuspicionEvent } from '../utils/suspicion';
 
 const EVENTSUB_URL = 'wss://eventsub.wss.twitch.tv/ws';
 const WELCOME_TIMEOUT_MS = 15_000;
@@ -42,6 +43,8 @@ interface Conn {
   moderate: Map<string, string>;
   /** channel -> broadcaster id, stream.online/offline held by this conn */
   stream: Map<string, string>;
+  /** channel -> broadcaster id, channel.suspicious_user.* assigned to this conn */
+  suspicious: Map<string, string>;
   /** deliberately disconnected (no subs / token gone) — don't auto-reconnect */
   parked: boolean;
 }
@@ -92,15 +95,17 @@ export class EventSubManager {
   }
 
   /** Which channels have active EventSub coverage (for admin status view). */
-  getStatus(): { moderate: string[]; stream: string[] } {
+  getStatus(): { moderate: string[]; stream: string[]; suspicious: string[] } {
     const moderate = new Set<string>();
     const stream = new Set<string>();
+    const suspicious = new Set<string>();
     for (const c of this.conns.values()) {
       if (!c.sessionId) continue;
       for (const ch of c.moderate.keys()) moderate.add(ch);
       for (const ch of c.stream.keys()) stream.add(ch);
+      for (const ch of c.suspicious.keys()) suspicious.add(ch);
     }
-    return { moderate: [...moderate], stream: [...stream] };
+    return { moderate: [...moderate], stream: [...stream], suspicious: [...suspicious] };
   }
 
   // ── connection lifecycle ────────────────────────────────────────────────
@@ -254,6 +259,10 @@ export class EventSubManager {
         for (const [ch, bid] of conn.stream) {
           if (bid === cond.broadcaster_user_id) conn.stream.delete(ch);
         }
+      } else if (subType?.startsWith('channel.suspicious_user')) {
+        for (const [ch, bid] of conn.suspicious) {
+          if (bid === cond.broadcaster_user_id) conn.suspicious.delete(ch);
+        }
       }
       this.scheduleReconcile(30_000);
     }
@@ -274,6 +283,12 @@ export class EventSubManager {
       const off = await this.subscribe(conn, 'stream.offline', '1', { broadcaster_user_id: bid });
       if (!on || !off) {
         conn.stream.delete(ch);
+        this.scheduleReconcile(30_000);
+      }
+    }
+    for (const [ch, bid] of conn.suspicious) {
+      if (!(await this.subscribeSuspicious(conn, ch, bid))) {
+        conn.suspicious.delete(ch);
         this.scheduleReconcile(30_000);
       }
     }
@@ -338,7 +353,7 @@ export class EventSubManager {
           email: t.email, login: t.login, userId: t.userId, token: t.token,
           ws: null, sessionId: null, lastMsgAt: 0, keepaliveSec: 10,
           welcomeTimer: null, reconnectTimer: null, reconnectDelay: 2_000,
-          welcomeWaiters: [], moderate: new Map(), stream: new Map(), parked: true,
+          welcomeWaiters: [], moderate: new Map(), stream: new Map(), suspicious: new Map(), parked: true,
         });
       }
     }
@@ -372,6 +387,17 @@ export class EventSubManager {
           conn.moderate.set(ch, bid);
           for (const other of live) if (other !== conn) other.moderate.delete(ch);
           covered = true;
+          // Метки подозрительности едут на том же соединении: тот же мод-токен,
+          // тот же канал. Отдельный скоуп moderator:read:suspicious_users — у
+          // грантов, выданных до его добавления, подписка вернёт 403, и канал
+          // просто останется без этого сигнала (детект по тексту не страдает).
+          const susOk = await this.subscribeSuspicious(conn, ch, bid);
+          if (susOk) {
+            conn.suspicious.set(ch, bid);
+            for (const other of live) if (other !== conn) other.suspicious.delete(ch);
+          } else {
+            conn.suspicious.delete(ch);
+          }
           break;
         }
         conn.moderate.delete(ch);
@@ -500,6 +526,20 @@ export class EventSubManager {
     return null;
   }
 
+  /**
+   * channel.suspicious_user.message + .update на одном соединении. Успех = обе
+   * подписки: .message даёт метку в момент сообщения, .update — ручные
+   * изменения статуса модератором в самом Twitch. Одна без другой оставила бы
+   * метки, которые нечем снять.
+   */
+  private async subscribeSuspicious(conn: Conn, ch: string, bid: string): Promise<boolean> {
+    const cond = { broadcaster_user_id: bid, moderator_user_id: conn.userId };
+    const msg = await this.subscribe(conn, 'channel.suspicious_user.message', '1', cond);
+    if (!msg) return false;
+    const upd = await this.subscribe(conn, 'channel.suspicious_user.update', '1', cond);
+    return upd;
+  }
+
   /** Create a subscription on this connection's session with ITS OWN token
    *  (Twitch: all subs on one WebSocket must use the same user token). */
   private async subscribe(conn: Conn, type: string, version: string, condition: any): Promise<boolean> {
@@ -542,6 +582,30 @@ export class EventSubManager {
       broadcast(this.wss, {
         type: subType === 'stream.online' ? 'stream_start' : 'stream_end',
         channel: ch, ts: Date.now(),
+      });
+      return;
+    }
+
+    // Метка подозрительности от Twitch — внешний сигнал для SpamEngine.
+    // Не действие модерации: в moderation_logs не пишется.
+    if (subType === 'channel.suspicious_user.message' || subType === 'channel.suspicious_user.update') {
+      const ch = (event.broadcaster_user_login || '').toLowerCase();
+      const user = (event.user_login || '').toLowerCase();
+      if (!ch || !user) return;
+      const rec = await applySuspicionEvent({
+        channel: ch,
+        username: user,
+        lowTrustStatus: event.low_trust_status ?? null,
+        types: Array.isArray(event.types) ? event.types : [],
+        banEvasion: event.ban_evasion_evaluation ?? null,
+        sharedBanChannels: Array.isArray(event.shared_ban_channel_ids) ? event.shared_ban_channel_ids.length : 0,
+        source: subType.endsWith('update') ? 'update' : 'message',
+      });
+      broadcast(this.wss, {
+        type: 'suspicious_user', channel: ch, username: user,
+        status: rec?.lowTrustStatus ?? null, types: rec?.types ?? [],
+        ban_evasion: rec?.banEvasion ?? null, cleared: rec?.cleared ?? false,
+        ts: Date.now(),
       });
       return;
     }

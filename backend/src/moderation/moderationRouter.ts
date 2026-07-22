@@ -2,6 +2,9 @@ import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
 import { logModerationAction } from '../utils/modLog';
+import { setCleared } from '../utils/suspicion';
+import { recordAudit } from '../utils/audit';
+import { broadcast } from '../websocket/wsHandler';
 
 export const moderationRouter = Router();
 
@@ -43,6 +46,53 @@ moderationRouter.post('/unban', async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err) {
     logger.error('POST /moderation/unban error', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Метки подозрительности Twitch ────────────────────────────────────────────
+// Список активных меток. cleared=true остаются в выдаче — модератору надо
+// видеть, что метка была и её сняли, иначе снятие выглядит как исчезновение.
+moderationRouter.get('/suspicious', async (req: Request, res: Response) => {
+  const channel = (req.query.channel as string) || null;
+  try {
+    const { rows } = await db.query(
+      `SELECT s.channel_name, s.username, s.low_trust_status, s.types, s.ban_evasion,
+              s.shared_ban_channels, s.first_seen, s.updated_at, s.cleared_at, s.cleared_by,
+              tm.display_name, tm.profile_image_url
+       FROM suspicious_users s
+       LEFT JOIN twitch_user_meta tm ON tm.username = s.username
+       WHERE ($1::text IS NULL OR s.channel_name = $1)
+       ORDER BY s.cleared_at NULLS FIRST, s.updated_at DESC
+       LIMIT 200`,
+      [channel]
+    );
+    res.json(rows);
+  } catch (err) {
+    logger.error('GET /moderation/suspicious error', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Снять метку (ложное срабатывание) или вернуть её.
+// Запись Twitch не удаляется и продолжает обновляться — гасится только бонус
+// к спам-скору, поэтому решение модератора переживает новые события Twitch.
+moderationRouter.post('/suspicious/clear', async (req: Request, res: Response) => {
+  const { channel, username, cleared = true } = req.body;
+  if (!channel || !username) return res.status(400).json({ error: 'channel and username required' });
+  try {
+    const rec = await setCleared(String(channel), String(username), !!cleared, req.user?.email || 'unknown');
+    if (!rec) return res.status(404).json({ error: 'not found' });
+    recordAudit(req.user?.email || 'unknown', cleared ? 'suspicion_cleared' : 'suspicion_restored',
+      `${String(channel).toLowerCase()}/${String(username).toLowerCase()}`);
+    broadcast((global as any).wss, {
+      type: 'suspicious_user', channel: rec.channel, username: rec.username,
+      status: rec.lowTrustStatus, types: rec.types, ban_evasion: rec.banEvasion,
+      cleared: rec.cleared, ts: Date.now(),
+    });
+    res.json({ success: true, cleared: rec.cleared });
+  } catch (err) {
+    logger.error('POST /moderation/suspicious/clear error', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, X, Check } from 'lucide-react';
-import { QueueItem } from '../../types';
+import { Shield, X, Check, AlertTriangle } from 'lucide-react';
+import { QueueItem, SuspicionMark } from '../../types';
 import { getInitials } from '../../utils/colors';
 import { Avatar } from '../UserCard/Avatar';
 import { api } from '../../hooks/useApi';
@@ -15,6 +15,7 @@ interface Props {
   onMuted: (id: string) => void;
   onClearAll: () => void;
   onUserClick: (username: string, channel: string, color: string) => void;
+  onSuspicionCleared: (channel: string, username: string) => void;
   lang: Lang;
 }
 
@@ -28,6 +29,7 @@ interface CardProps {
   onUserClick: () => void;
   isSelected: boolean;
   onToggleSelected: () => void;
+  onSuspicionCleared: (channel: string, username: string) => void;
   lang: Lang;
 }
 
@@ -38,7 +40,73 @@ function formatAge(ts: number, lang: Lang): string {
   return lang === 'ru' ? `${min}м` : `${min}m`;
 }
 
-function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, onUserClick, isSelected, onToggleSelected, lang }: CardProps) {
+/**
+ * Метка Twitch о подозрительном аккаунте. Это внешний сигнал (обход бана, бан в
+ * связанных каналах), который поднял спам-скор — поэтому рядом с ним всегда
+ * лежит кнопка снятия: если наблюдение ложное, модератор гасит его в один клик
+ * и юзер перестаёт получать надбавку.
+ */
+function SuspicionBadge({ channel, username, mark, onCleared, lang }: {
+  channel: string;
+  username: string;
+  mark: SuspicionMark;
+  onCleared: (channel: string, username: string) => void;
+  lang: Lang;
+}) {
+  const [busy, setBusy] = useState(false);
+  const label = mark.ban_evasion === 'likely' || mark.types.includes('ban_evader')
+    ? (lang === 'ru' ? 'обход бана' : 'ban evader')
+    : mark.types.includes('banned_in_shared_channel')
+      ? (lang === 'ru' ? 'бан в связанных' : 'shared ban')
+      : mark.status === 'restricted'
+        ? (lang === 'ru' ? 'ограничен' : 'restricted')
+        : (lang === 'ru' ? 'под наблюдением' : 'monitored');
+
+  const clear = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.post('/api/moderation/suspicious/clear', { channel, username, cleared: true });
+      onCleared(channel, username);
+    } catch {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <span
+      title={lang === 'ru'
+        ? `Twitch пометил аккаунт: ${label}. Спам-скор повышен. Крестик — снять метку, если наблюдение ложное.`
+        : `Twitch flagged this account: ${label}. Spam score raised. Click × to clear a false positive.`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0,
+        padding: '1px 4px 1px 6px', borderRadius: '6px',
+        background: 'rgba(255,89,89,0.1)', border: '1px solid rgba(255,89,89,0.28)',
+        fontSize: '10px', fontWeight: 700, color: '#ff5959',
+        opacity: busy ? 0.4 : 1, transition: 'opacity 0.15s',
+      }}>
+      <AlertTriangle size={9} />
+      {label}
+      <button
+        onClick={clear}
+        disabled={busy}
+        title={lang === 'ru' ? 'Снять метку' : 'Clear mark'}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: '13px', height: '13px', padding: 0, marginLeft: '1px',
+          borderRadius: '4px', border: 'none', cursor: busy ? 'default' : 'pointer',
+          background: 'transparent', color: '#ff5959',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,89,89,0.2)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+        <X size={9} />
+      </button>
+    </span>
+  );
+}
+
+function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, onUserClick, isSelected, onToggleSelected, onSuspicionCleared, lang }: CardProps) {
   const durations = muteDurations(lang);
   const isMuted = item.muted;
   const customReason = typeof window !== 'undefined' ? localStorage.getItem('mute_reason') : null;
@@ -128,6 +196,16 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
         }}>
           · {item.channel}
         </span>
+
+        {item.suspicion && (
+          <SuspicionBadge
+            channel={item.channel}
+            username={item.username}
+            mark={item.suspicion}
+            onCleared={onSuspicionCleared}
+            lang={lang}
+          />
+        )}
 
         {!isMuted && spamCount > 1 && (
           <span
@@ -245,7 +323,7 @@ function QueueCard({ item, duration, onDurationChange, onMute, onBan, onRemove, 
   );
 }
 
-export function ModerationQueue({ items, onRemove, onMuted, onClearAll, onUserClick, lang }: Props) {
+export function ModerationQueue({ items, onRemove, onMuted, onClearAll, onUserClick, onSuspicionCleared, lang }: Props) {
   const [muteDurs, setMuteDurs] = useState<Record<string, number>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
@@ -419,6 +497,7 @@ export function ModerationQueue({ items, onRemove, onMuted, onClearAll, onUserCl
                     onUserClick={() => onUserClick(item.username, item.channel, item.color)}
                     isSelected={isSelected}
                     onToggleSelected={() => toggleSelected(item.id)}
+                    onSuspicionCleared={onSuspicionCleared}
                     lang={lang} />
                 </div>
               );

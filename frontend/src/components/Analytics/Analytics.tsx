@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Radio, Calendar, Clock, Zap, ChevronDown, ChevronLeft, ChevronRight, VolumeX, Ban, RotateCcw, Shield, Users, TrendingUp, X, MessageSquare, AlertTriangle } from 'lucide-react';
 import { api } from '../../hooks/useApi';
@@ -678,6 +678,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   const [detail, setDetail] = useState<MinuteDetail | null>(null);
   const [detailMinute, setDetailMinute] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [gameChanges, setGameChanges] = useState<{ game: string | null; changed_at: string }[]>([]);
   const panStartRef = useRef<{ clientX: number; viewStart: number; viewEnd: number } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -720,11 +721,19 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
     fetchData(false);
   }, [fetchData]);
 
+  const fetchGames = useCallback(() => {
+    api.get<{ changes: { game: string | null; changed_at: string }[] }>(`/api/streams/${streamId}/games`)
+      .then(r => setGameChanges(r.changes || []))
+      .catch(() => setGameChanges([]));
+  }, [streamId]);
+
+  useEffect(() => { fetchGames(); }, [fetchGames]);
+
   useEffect(() => {
     if (!isLive) return;
-    pollRef.current = setInterval(() => fetchData(true), 30_000);
+    pollRef.current = setInterval(() => { fetchData(true); fetchGames(); }, 30_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [isLive, fetchData]);
+  }, [isLive, fetchData, fetchGames]);
 
   // Wheel zoom — non-passive to allow preventDefault
   const zoomRef = useRef({ viewStart: 0, viewEnd: 0, dataLen: 0 });
@@ -843,6 +852,59 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
     setTooltip({ svgX, idx });
     setTooltipPos({ x: e.clientX, y: e.clientY });
   };
+
+  // ── Категории: отрезки по всей длине стрима ────────────────────────────
+  // Считается по полному массиву data, а не по видимому окну: иначе цвета и
+  // границы отрезков менялись бы при зуме (§10 — цвет привязан к сущности).
+  const gameSegments = useMemo(() => {
+    if (gameChanges.length === 0 || data.length === 0) return [];
+    const times = data.map(d => new Date(d.minute).getTime());
+    const idxFor = (iso: string) => {
+      const t = new Date(iso).getTime();
+      if (t <= times[0]) return 0;
+      let lo = 0, hi = times.length - 1;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (times[mid] <= t) lo = mid; else hi = mid - 1;
+      }
+      return lo;
+    };
+    const out: { game: string | null; from: number; to: number }[] = [];
+    for (let i = 0; i < gameChanges.length; i++) {
+      const from = idxFor(gameChanges[i].changed_at);
+      const to = i + 1 < gameChanges.length ? idxFor(gameChanges[i + 1].changed_at) : data.length - 1;
+      const prev = out[out.length - 1];
+      // Склейка подряд идущих одинаковых категорий (и нулевых отрезков, если
+      // две смены попали в одну минуту).
+      if (prev && prev.game === gameChanges[i].game) prev.to = Math.max(prev.to, to);
+      else out.push({ game: gameChanges[i].game, from, to });
+    }
+    return out.filter(s => s.to >= s.from);
+  }, [gameChanges, data]);
+
+  // login → цвет строится один раз по порядку ПЕРВОГО появления в полном
+  // списке, поэтому не зависит от фильтрации/зума.
+  const gameColors = useMemo(() => {
+    const palette = ['#a070ff', '#00e5cc', '#ffc800', '#00c878', '#5b9eff', '#ff5959'];
+    const map = new Map<string, string>();
+    for (const s of gameSegments) {
+      const name = s.game || '—';
+      if (!map.has(name)) map.set(name, palette[map.size % palette.length]);
+    }
+    return map;
+  }, [gameSegments]);
+
+  const viewRange = Math.max(1, viewEnd - viewStart);
+  const idxToX = (idx: number) => Y_LABEL_W + ((idx - viewStart) / viewRange) * CHART_W;
+  // Отрезки, попадающие в текущее окно (обрезаются по его границам).
+  const visibleSegments = gameSegments
+    .filter(s => s.to >= viewStart && s.from <= viewEnd)
+    .map(s => ({ ...s, from: Math.max(s.from, viewStart), to: Math.min(s.to, viewEnd) }));
+  // Точки смены внутри окна — вертикальные маркеры на самом графике.
+  // Первый отрезок это старт стрима, а не смена, поэтому пропускается.
+  const changeMarkers = gameSegments
+    .slice(1)
+    .filter(s => s.from >= viewStart && s.from <= viewEnd);
 
   // Overview strip
   const allMaxY = Math.max(...data.map(d => d.msgs), 1);
@@ -969,6 +1031,19 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
               {spamLine && <path d={spamLine} fill="none" stroke="#00e5cc" strokeWidth="2" strokeLinecap="round" strokeDasharray="0" />}
             </g>
 
+            {/* Смены категории — вертикальные маркеры в момент смены */}
+            {changeMarkers.map((s, i) => {
+              const x = idxToX(s.from);
+              const color = gameColors.get(s.game || '—') || '#a070ff';
+              return (
+                <g key={`gc-${i}`}>
+                  <line x1={x} y1={0} x2={x} y2={CHART_H}
+                    stroke={color} strokeWidth="1.5" strokeDasharray="3 3" opacity="0.5" />
+                  <circle cx={x} cy={0} r="3" fill={color} />
+                </g>
+              );
+            })}
+
             {/* Crosshair */}
             {tooltip && (
               <line x1={tooltip.svgX} y1={0} x2={tooltip.svgX} y2={CHART_H}
@@ -1022,9 +1097,81 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
                 <span style={{ color: 'rgba(255,255,255,0.6)' }}>Спам-юзеров:</span>
                 <span style={{ color: '#5b9eff', fontWeight: 700, marginLeft: 'auto' }}>{tooltipData.spam_users}</span>
               </div>
+              {(() => {
+                const absIdx = viewStart + tooltip.idx;
+                const seg = gameSegments.find(s => absIdx >= s.from && absIdx <= s.to);
+                if (!seg) return null;
+                const color = gameColors.get(seg.game || '—') || '#a070ff';
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '6px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: color, flexShrink: 0 }} />
+                    <span style={{ color: 'rgba(255,255,255,0.6)' }}>Категория:</span>
+                    <span style={{ color, fontWeight: 700, marginLeft: 'auto', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {seg.game || '—'}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
+
+        {/* Полоса категорий — тот же масштаб X, что и у графика */}
+        {gameSegments.length > 0 && (
+          <div style={{ marginTop: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '5px' }}>
+              <span style={{ fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                Категория
+              </span>
+              <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.2)' }}>
+                {gameSegments.length === 1
+                  ? 'не менялась за стрим'
+                  : `смен: ${gameSegments.length - 1}`}
+              </span>
+            </div>
+            <svg viewBox={`0 0 ${W} 20`} style={{ width: '100%', height: '20px', display: 'block' }} preserveAspectRatio="none">
+              {visibleSegments.map((s, i) => {
+                const x1 = idxToX(s.from);
+                const x2 = idxToX(s.to);
+                const w = Math.max(2, x2 - x1);
+                const name = s.game || '—';
+                const color = gameColors.get(name) || '#a070ff';
+                return (
+                  <g key={`seg-${i}`}>
+                    <rect x={x1} y={2} width={w} height={16} rx={3} fill={color} opacity={0.22} />
+                    <rect x={x1} y={2} width={2} height={16} rx={1} fill={color} opacity={0.9} />
+                    {/* Подпись только если отрезок реально широкий — иначе
+                        текст растягивается preserveAspectRatio="none" и мажет */}
+                    {w > 90 && (
+                      <text x={x1 + 8} y={14}
+                        style={{ fontSize: '9px', fill: color, fontWeight: 700, fontFamily: 'Inter,sans-serif' }}>
+                        {name.length > 22 ? `${name.slice(0, 21)}…` : name}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+            </svg>
+            {/* Легенда: категория → когда включена. Нужна, потому что узкие
+                отрезки на полосе остаются без подписи. */}
+            {gameSegments.length > 1 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginTop: '6px' }}>
+                {gameSegments.map((s, i) => {
+                  const name = s.game || '—';
+                  const color = gameColors.get(name) || '#a070ff';
+                  const at = data[s.from]?.minute;
+                  return (
+                    <span key={`lg-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'rgba(255,255,255,0.45)' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: color, flexShrink: 0 }} />
+                      <span style={{ color: 'rgba(255,255,255,0.7)' }}>{name}</span>
+                      {at && <span style={{ color: 'rgba(255,255,255,0.25)' }}>{mskTime(at)}</span>}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Overview strip */}
         <div style={{ marginTop: '8px', position: 'relative', height: `${OVERVIEW_H}px`, background: 'rgba(255,255,255,0.02)', borderRadius: '6px', overflow: 'hidden' }}>

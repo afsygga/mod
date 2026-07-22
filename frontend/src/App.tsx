@@ -152,6 +152,7 @@ export default function App() {
               ...q,
               score: data.score, reasons: data.reasons, lastMsg: data.lastMsg, muted: false,
               spamCount: (q.spamCount || 1) + 1,
+              suspicion: data.suspicion ?? null,
             }
           : q);
         // New spammer in queue — play sound
@@ -160,7 +161,7 @@ export default function App() {
           id: stableId, channel: data.channel, username: data.username,
           score: data.score, lastMsg: data.lastMsg, reasons: data.reasons,
           color: getUserColor(data.username), muted: false, ts: Date.now(),
-          spamCount: 1,
+          spamCount: 1, suspicion: data.suspicion ?? null,
         };
         return [item, ...prev].slice(0, 100);
       });
@@ -175,6 +176,20 @@ export default function App() {
     }
     if (data.type === 'stream_start' || data.type === 'stream_end') {
       setStreamEventTick(t => t + 1);
+      return;
+    }
+    if (data.type === 'suspicious_user') {
+      // Метка появилась/обновилась/снята — синхронизируем карточку в очереди,
+      // чтобы снятие в одной вкладке было видно во всех.
+      const stableId = `q-${data.channel}-${data.username}`;
+      setQueue(prev => prev.map(q => q.id === stableId
+        ? {
+            ...q,
+            suspicion: data.cleared || !data.status
+              ? null
+              : { status: data.status, types: data.types || [], ban_evasion: data.ban_evasion ?? null },
+          }
+        : q));
       return;
     }
     if (data.type === 'mod_action') {
@@ -705,6 +720,8 @@ export default function App() {
               }}
               onClearAll={() => setQueue([])}
               onUserClick={(username, channel, color) => setSelectedUser({ username, channel, color })}
+              onSuspicionCleared={(channel, username) => setQueue(prev => prev.map(q =>
+                q.id === `q-${channel}-${username}` ? { ...q, suspicion: null } : q))}
               lang={lang} />
           </div>
         </div>

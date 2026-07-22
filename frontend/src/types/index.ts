@@ -33,6 +33,15 @@ export interface QueueItem {
   ts: number;
   /** How many times this user has been flagged for spam (累計) */
   spamCount?: number;
+  /** Метка Twitch о подозрительном аккаунте (null — метки нет либо она снята) */
+  suspicion?: SuspicionMark | null;
+}
+
+/** Внешний сигнал Twitch: обход бана / бан в связанных каналах / наблюдение */
+export interface SuspicionMark {
+  status: string | null;
+  types: string[];
+  ban_evasion: string | null;
 }
 
 export interface ModerationLog {

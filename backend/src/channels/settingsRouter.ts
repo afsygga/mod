@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
 import { recordAudit } from '../utils/audit';
+import { loadPoints } from '../utils/suspicion';
 
 export const settingsRouter = Router();
 
@@ -51,6 +52,8 @@ settingsRouter.put('/', async (req: Request, res: Response) => {
       // Invalidate cached settings so next message reads fresh values
       tm.invalidateSettingsCache?.();
     }
+    // Очки за метку подозрительности живут в кэше suspicion — перечитать.
+    if (Object.keys(updates).some(k => k.startsWith('suspicion_points_'))) await loadPoints();
     recordAudit(req.user?.email || 'unknown', 'settings_update', JSON.stringify(Object.keys(updates)));
     res.json({ success: true });
   } catch (err) {

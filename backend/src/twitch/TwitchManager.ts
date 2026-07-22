@@ -7,6 +7,7 @@ import { logger } from '../utils/logger';
 import { TelegramBot } from '../telegram/TelegramBot';
 import { refreshUserToken, refreshBroadcasterToken, getAppToken, validateAccessToken } from './twitchToken';
 import { logModerationAction } from '../utils/modLog';
+import { getSuspicionSignal, getSuspicionRecord } from '../utils/suspicion';
 import {
   recordChatReceived, recordChatAccepted, recordChatDropped, recordChatError,
   recordSpamDecision, recordModeration, recordAutomod, recordIrcReconnect,
@@ -292,7 +293,9 @@ export class TwitchManager {
 
     let analysis;
     try {
-      analysis = state.engine.analyze(username, message);
+      // Метка Twitch читается из памяти (кэш suspicion) — на горячем пути
+      // сообщения БД не трогается.
+      analysis = state.engine.analyze(username, message, getSuspicionSignal(channelName, username));
     } catch (err: any) {
       recordChatError();
       logger.error(`spam analyze error: ${err?.message || err}`);
@@ -325,9 +328,13 @@ export class TwitchManager {
     );
 
     if (analysis.score >= threshold && !roleIgnored) {
+      const susRec = getSuspicionRecord(channelName, username);
       broadcast(this.wss, {
         type: 'queue_add', channel: channelName, username,
         score: analysis.score, reasons: analysis.reasons, lastMsg: message,
+        suspicion: susRec && !susRec.cleared
+          ? { status: susRec.lowTrustStatus, types: susRec.types, ban_evasion: susRec.banEvasion }
+          : null,
       });
 
       // Telegram notifications — sent to ALL channel subscribers with TG enabled
@@ -806,10 +813,19 @@ export class TwitchManager {
 
     const liveChannels = new Set<string>(liveStreams.map((s: any) => s.user_login.toLowerCase()));
 
+    // Категория ДО апсерта — нужна, чтобы поймать смену (апсерт её перезапишет).
+    const { rows: prevRows } = await db.query(
+      'SELECT twitch_stream_id, game FROM stream_sessions WHERE ended_at IS NULL AND channel_name = ANY($1) AND twitch_stream_id IS NOT NULL',
+      [channelNames]
+    );
+    const prevGame = new Map<string, string | null>(prevRows.map((r: any) => [r.twitch_stream_id, r.game ?? null]));
+
     // Upsert live streams
     for (const stream of liveStreams) {
       const ch = stream.user_login.toLowerCase();
-      await db.query(`
+      const newGame = stream.game_name || null;
+      const known = prevGame.has(stream.id);
+      const { rows: upserted } = await db.query(`
         INSERT INTO stream_sessions (channel_name, started_at, title, game, peak_viewers, twitch_stream_id)
         VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (twitch_stream_id) WHERE twitch_stream_id IS NOT NULL DO UPDATE SET
@@ -817,7 +833,32 @@ export class TwitchManager {
           game = EXCLUDED.game,
           peak_viewers = GREATEST(stream_sessions.peak_viewers, EXCLUDED.peak_viewers),
           ended_at = NULL
-      `, [ch, new Date(stream.started_at), stream.title || null, stream.game_name || null, stream.viewer_count || 0, stream.id]);
+        RETURNING id
+      `, [ch, new Date(stream.started_at), stream.title || null, newGame, stream.viewer_count || 0, stream.id]);
+
+      // Точка на таймлайне: стартовая категория для новой сессии, либо смена.
+      const sessionId = upserted[0]?.id;
+      const changed = !known || prevGame.get(stream.id) !== newGame;
+      if (sessionId && changed) {
+        // Метка времени: для новой сессии — начало стрима, для смены — сейчас
+        // (разрешение = период поллера, 60с).
+        const at = known ? new Date() : new Date(stream.started_at);
+        // NOT EXISTS защищает от дубля подряд идущих одинаковых категорий
+        // (рестарт бэкенда, повторный тик до апсерта).
+        const ins = await db.query(`
+          INSERT INTO stream_game_changes (session_id, channel_name, game, changed_at)
+          SELECT $1, $2, $3, $4
+          WHERE NOT EXISTS (
+            SELECT 1 FROM stream_game_changes g
+            WHERE g.session_id = $1 AND g.game IS NOT DISTINCT FROM $3::varchar
+              AND g.changed_at = (SELECT MAX(changed_at) FROM stream_game_changes WHERE session_id = $1)
+          )
+        `, [sessionId, ch, newGame, at]).catch(() => ({ rowCount: 0 }));
+        if ((ins.rowCount ?? 0) > 0 && known) {
+          logger.info(`[streams] ${ch}: category → ${newGame || '—'}`);
+          broadcast(this.wss, { type: 'game_change', channel: ch, game: newGame, ts: at.getTime() });
+        }
+      }
     }
 
     // Close sessions that are no longer live

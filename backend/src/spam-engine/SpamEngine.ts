@@ -4,6 +4,18 @@ export interface SpamAnalysis {
   similarityPct: number;
   /** Сообщение из вайтлиста, но зачтено из-за флуда — в очередь без автомута */
   whitelistedFlood?: boolean;
+  /** Сколько очков добавил внешний сигнал подозрительности (0 если не применялся) */
+  suspicionBonus?: number;
+}
+
+/**
+ * Внешний сигнал о пользователе, которого движок из текста получить не может
+ * (Twitch помечает обход бана / бан в связанных каналах). Передаётся вызывающим
+ * — движок остаётся чистой логикой без БД и сети.
+ */
+export interface SuspicionSignal {
+  points: number;
+  label: string;
 }
 
 interface MessageRecord {
@@ -208,7 +220,13 @@ export class SpamEngine {
     this.settings = { ...this.settings, ...settings };
   }
 
-  analyze(username: string, message: string): SpamAnalysis {
+  /**
+   * `suspicion` — необязательный внешний сигнал (см. SuspicionSignal). Он
+   * МОДИФИКАТОР, а не триггер: очки добавляются только к уже ненулевому score.
+   * Подозрительный юзер, который пишет нормально, не должен попадать в очередь
+   * из-за одной метки Twitch — иначе метка превращается в теневой бан.
+   */
+  analyze(username: string, message: string, suspicion?: SuspicionSignal): SpamAnalysis {
     const now = Date.now();
     const memWindowMs = this.settings.memWindowSeconds * 1000;
 
@@ -567,7 +585,16 @@ export class SpamEngine {
       }
     }
 
-    return { score, reasons: uniqueReasons, similarityPct: simPct, whitelistedFlood };
+    // === ВНЕШНИЙ СИГНАЛ ПОДОЗРИТЕЛЬНОСТИ ===
+    // Только усиливает уже сработавшую детекцию (см. док к analyze).
+    let suspicionBonus = 0;
+    if (suspicion && suspicion.points > 0 && score > 0) {
+      suspicionBonus = suspicion.points;
+      score = Math.min(100, Math.max(0, Math.round(score + suspicionBonus)));
+      uniqueReasons.push(suspicion.label);
+    }
+
+    return { score, reasons: uniqueReasons, similarityPct: simPct, whitelistedFlood, suspicionBonus };
   }
 
   clearUser(username: string): void {

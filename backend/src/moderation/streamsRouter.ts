@@ -201,6 +201,31 @@ streamsRouter.get('/:id/minute-detail', async (req: Request, res: Response) => {
   }
 });
 
+// Таймлайн смен категории внутри трансляции (для оверлея на графике стрима).
+// Первая точка — стартовая категория, дальше каждая смена. Отдаётся вместе с
+// границами сессии, чтобы фронт мог посчитать длительность последнего отрезка.
+streamsRouter.get('/:id/games', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
+    const { rows: [session] } = await db.query(
+      'SELECT started_at, ended_at FROM stream_sessions WHERE id=$1', [id]
+    );
+    if (!session) return res.status(404).json({ error: 'not found' });
+    const { rows } = await db.query(
+      `SELECT game, changed_at FROM stream_game_changes WHERE session_id=$1 ORDER BY changed_at ASC`,
+      [id]
+    );
+    res.json({
+      started_at: session.started_at,
+      ended_at: session.ended_at,
+      changes: rows,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'stream games failed' });
+  }
+});
+
 // Per-minute message data for a stream session (for zoomed chart)
 streamsRouter.get('/:id/messages-by-minute', async (req: Request, res: Response) => {
   try {
