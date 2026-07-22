@@ -648,13 +648,20 @@ export class TwitchManager {
   ): Promise<{ ok: boolean; message: string; category?: string }> {
     try {
       const clientId = process.env.TWITCH_CLIENT_ID || '';
-      // Search + id lookup use a reliable moderator token (refresh on 401)
-      let searchHeaders = await this.getHelixHeaders(ownerEmail);
+      // Search + id lookup use a reliable moderator token (refresh on 401).
+      // Если актор не задан (Steam-синхронизация), берём primary канала, а не
+      // падаем на глобальный env-токен: тот статичный и без refresh (§7), и его
+      // протухание превращалось бы в «Игра не найдена» — сообщение, которое
+      // уводит от настоящей причины.
+      const searchOwner = ownerEmail
+        ?? this.channels.get(channelName.toLowerCase())?.primaryEmail
+        ?? null;
+      let searchHeaders = await this.getHelixHeaders(searchOwner);
       const searchGame = async () => {
         // Fuzzy category search (handles "Counter-Strike", "Just Chatting", etc.)
         let r = await fetch(`https://api.twitch.tv/helix/search/categories?query=${encodeURIComponent(gameName)}&first=10`, { headers: searchHeaders });
-        if (r.status === 401 && ownerEmail) {
-          const fresh = await refreshUserToken(ownerEmail);
+        if (r.status === 401 && searchOwner) {
+          const fresh = await refreshUserToken(searchOwner);
           if (fresh) { searchHeaders = { 'Client-Id': clientId, 'Authorization': `Bearer ${fresh}`, 'Content-Type': 'application/json' }; r = await fetch(`https://api.twitch.tv/helix/search/categories?query=${encodeURIComponent(gameName)}&first=10`, { headers: searchHeaders }); }
         }
         if (!r.ok) return null;
