@@ -39,6 +39,7 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-change_me_in_production}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
     ports:
