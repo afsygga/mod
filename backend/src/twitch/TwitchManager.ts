@@ -272,8 +272,8 @@ export class TwitchManager {
       recordChatDropped('command');
       const cachedForCmd = await this.getCachedSettings();
       if (!cachedForCmd.setGameEnabled) return;
-      this.setGame(channelName, alias, state.primaryEmail).then(reply => {
-        this.globalClient?.say(`#${channelName}`, reply).catch(() => {});
+      this.setGame(channelName, alias, state.primaryEmail).then(r => {
+        this.globalClient?.say(`#${channelName}`, r.message).catch(() => {});
       });
       return;
     }
@@ -284,8 +284,8 @@ export class TwitchManager {
       if (!cachedForCmd.setGameEnabled) return;
       const gameName = message.trim().slice(3).trim();
       if (gameName) {
-        this.setGame(channelName, gameName, state.primaryEmail).then(reply => {
-          this.globalClient?.say(`#${channelName}`, reply).catch(() => {});
+        this.setGame(channelName, gameName, state.primaryEmail).then(r => {
+          this.globalClient?.say(`#${channelName}`, r.message).catch(() => {});
         });
       }
       return;
@@ -638,7 +638,14 @@ export class TwitchManager {
     };
   }
 
-  private async setGame(channelName: string, gameName: string, ownerEmail: string | null): Promise<string> {
+  /**
+   * Меняет категорию канала. Результат структурный, а не строка: `!g` берёт из
+   * него `message` для ответа в чат, Steam-синхронизация — `ok`, чтобы понять,
+   * применилась ли смена, и не двигать своё «последнее состояние» при провале.
+   */
+  async setGame(
+    channelName: string, gameName: string, ownerEmail: string | null
+  ): Promise<{ ok: boolean; message: string; category?: string }> {
     try {
       const clientId = process.env.TWITCH_CLIENT_ID || '';
       // Search + id lookup use a reliable moderator token (refresh on 401)
@@ -657,7 +664,7 @@ export class TwitchManager {
         return list.find(g => g.name.toLowerCase() === gameName.toLowerCase()) || list[0] || null;
       };
       const game = await searchGame();
-      if (!game) return `Игра не найдена: ${gameName}`;
+      if (!game) return { ok: false, message: `Игра не найдена: ${gameName}` };
 
       // broadcaster_id
       const { rows } = await db.query('SELECT twitch_id FROM twitch_user_meta WHERE username=$1', [channelName]);
@@ -667,7 +674,7 @@ export class TwitchManager {
         const ud: any = await ur.json();
         broadcasterId = ud.data?.[0]?.id || '';
       }
-      if (!broadcasterId) return 'Не удалось найти broadcaster_id';
+      if (!broadcasterId) return { ok: false, message: 'Не удалось найти broadcaster_id' };
 
       // Changing the category REQUIRES the broadcaster's OWN token with
       // channel:manage:broadcast (a moderator token can't do it). We collect
@@ -698,7 +705,7 @@ export class TwitchManager {
         candidates.push({ token: String(ur[0].twitch_oauth).replace(/^oauth:/, ''), refresh: () => refreshUserToken(brEmail) });
       }
       if (candidates.length === 0) {
-        return `Категория не изменена: стримеру нужно войти на сайте через Twitch`;
+        return { ok: false, message: `Категория не изменена: стримеру нужно войти на сайте через Twitch` };
       }
 
       const doPatch = async (tok: string): Promise<{ ok: boolean; status: number; message: string }> => {
@@ -721,17 +728,17 @@ export class TwitchManager {
           const fresh = await cand.refresh();
           if (fresh) attempt = await doPatch(fresh);
         }
-        if (attempt.ok) return `Категория изменена: ${game.name}`;
+        if (attempt.ok) return { ok: true, message: `Категория изменена: ${game.name}`, category: game.name };
         lastStatus = attempt.status;
         lastMsg = attempt.message;
         // 401 (dead grant) / 403 (grant without the scope) → try next credential
       }
       if (lastStatus === 401 || lastStatus === 403) {
-        return `Категория не изменена: перезайди на сайте через Twitch (нужны новые права)`;
+        return { ok: false, message: `Категория не изменена: перезайди на сайте через Twitch (нужны новые права)` };
       }
-      return `Ошибка: ${lastMsg || lastStatus}`;
+      return { ok: false, message: `Ошибка: ${lastMsg || lastStatus}` };
     } catch (err: any) {
-      return `Ошибка: ${err?.message}`;
+      return { ok: false, message: `Ошибка: ${err?.message}` };
     }
   }
 

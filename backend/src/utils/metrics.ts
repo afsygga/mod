@@ -37,6 +37,8 @@ const wsConnections  = C('afsyg_websocket_connections_total', 'WebSocket client 
 const dbPoolErrors   = C('afsyg_db_pool_errors_total', 'pg.Pool error events');
 const processErrors  = C('afsyg_process_unhandled_errors_total', 'Unhandled process errors', ['kind']);
 const jobRuns        = C('afsyg_background_job_runs_total', 'Completed background job runs', ['job', 'result']);
+const steamApi        = C('afsyg_steam_api_requests_total', 'Steam GetPlayerSummaries requests', ['result']);
+const steamChanges    = C('afsyg_steam_category_changes_total', 'Twitch category changes driven by Steam presence', ['result']);
 const suspicionEvents = C('afsyg_suspicious_user_events_total', 'Twitch suspicious-user EventSub notifications', ['source']);
 const suspicionBonus  = C('afsyg_suspicion_score_bonus_applied_total', 'Messages whose spam score was raised by the Twitch suspicion signal');
 
@@ -49,6 +51,7 @@ const jobInProgress   = G('afsyg_background_job_in_progress', 'Job currently run
 const oauthSessions   = G('afsyg_twitch_oauth_sessions', 'OAuth sessions by status', ['kind', 'status']);
 const buildInfo       = G('afsyg_build_info', 'Build version + revision', ['version', 'revision']);
 const suspiciousUsers = G('afsyg_suspicious_users_tracked', 'Users carrying a Twitch suspicion mark', ['state']);
+const steamLinks      = G('afsyg_steam_links', 'Channels linked to a Steam account', ['state']);
 
 // Zero-init known series so alert expressions have a baseline.
 (['self', 'unknown_channel', 'non_primary', 'duplicate', 'command'] as const).forEach(r => chatDropped.labels(r).inc(0));
@@ -57,6 +60,9 @@ const suspiciousUsers = G('afsyg_suspicious_users_tracked', 'Users carrying a Tw
 (['success', 'fallback_success', 'error'] as const).forEach(r => automodActions.labels('timeout', r).inc(0));
 (['message', 'update'] as const).forEach(s => suspicionEvents.labels(s).inc(0));
 (['flagged', 'cleared'] as const).forEach(s => suspiciousUsers.labels(s).set(0));
+(['success', 'error'] as const).forEach(r => steamApi.labels(r).inc(0));
+(['success', 'failed'] as const).forEach(r => steamChanges.labels(r).inc(0));
+(['enabled', 'disabled'] as const).forEach(s => steamLinks.labels(s).set(0));
 
 // ── point-in-time gauges (filled by a provider on scrape) ────────────────────
 export interface Pit {
@@ -141,6 +147,12 @@ export const recordWsOpen = () => wsConnections.labels('opened').inc();
 export const recordWsClose = () => wsConnections.labels('closed').inc();
 export const recordUnhandled = (kind: 'unhandled_rejection' | 'uncaught_exception') => processErrors.labels(kind).inc();
 export const recordDbPoolError = () => dbPoolErrors.inc();
+export const recordSteamApi = (result: 'success' | 'error') => steamApi.labels(result).inc();
+export const recordSteamCategoryChange = (result: 'success' | 'failed') => steamChanges.labels(result).inc();
+export function setSteamLinks(enabled: number, disabled: number): void {
+  steamLinks.labels('enabled').set(enabled);
+  steamLinks.labels('disabled').set(disabled);
+}
 export const recordSuspicionEvent = (source: 'message' | 'update') => suspicionEvents.labels(source).inc();
 export const recordSuspicionBonus = () => suspicionBonus.inc();
 export function setSuspiciousTracked(flagged: number, cleared: number): void {

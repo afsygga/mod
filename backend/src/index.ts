@@ -36,6 +36,7 @@ import { register as metricsRegister, setPitProvider, setBuildInfo, setOauthSess
 import { TelegramBot } from './telegram/TelegramBot';
 import { wsHandler } from './websocket/wsHandler';
 import { loadSuspicion, loadPoints } from './utils/suspicion';
+import { SteamSync } from './steam/SteamSync';
 import { logger } from './utils/logger';
 
 const app = express();
@@ -115,6 +116,9 @@ const twitchManager = new TwitchManager(wss);
 
 const eventSubManager = new EventSubManager(wss);
 (global as any).eventSubManager = eventSubManager;
+
+const steamSync = new SteamSync(wss);
+(global as any).steamSync = steamSync;
 
 const PORT = parseInt(process.env.PORT || '4000');
 const APP_VERSION = (() => { try { return require('../package.json').version || 'unknown'; } catch { return 'unknown'; } })();
@@ -251,6 +255,32 @@ async function runMigrations() {
       )
     `);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_suspicious_updated ON suspicious_users(updated_at DESC)`);
+    // Steam → Twitch: привязка канала к Steam-аккаунту стримера.
+    // last_game — последнее, что видели в Steam; смена этого значения и есть
+    // триггер смены категории (не периодическая простановка, см. steam/SteamSync).
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS steam_links (
+        channel_name VARCHAR(64) PRIMARY KEY,
+        steam_id64 VARCHAR(32) NOT NULL,
+        enabled BOOLEAN DEFAULT true,
+        last_game VARCHAR(190),
+        last_appid VARCHAR(32),
+        last_synced_at TIMESTAMPTZ,
+        last_change_at TIMESTAMPTZ,
+        last_result TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    // Ручные соответствия: имя игры в Steam → название категории на Twitch.
+    // Нужны там, где fuzzy-поиск Twitch промахивается ("PUBG: BATTLEGROUNDS"
+    // против "PLAYERUNKNOWN'S BATTLEGROUNDS" и подобное).
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS steam_category_map (
+        steam_game VARCHAR(190) PRIMARY KEY,
+        twitch_category VARCHAR(190) NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
     // One-time clean slate: wipe old stream history + chat messages so backend
     // tracking starts fresh from 2026-07-01. Guarded by a flag so it runs once.
     const { rows: resetFlag } = await db.query("SELECT 1 FROM settings WHERE key='reset_streams_2026_07_01'");
@@ -328,6 +358,11 @@ async function start() {
     // Start EventSub — captures ALL moderation actions (bans/timeouts/unbans/
     // deletes) from any client, live, and writes them to moderation_logs.
     eventSubManager.start();
+
+    // Steam → Twitch: опрос присутствия в игре и авто-смена категории.
+    // Сам решает, включён ли он (глобальная настройка + STEAM_API_KEY), поэтому
+    // стартует безусловно.
+    steamSync.start();
 
     // Hourly validation of every stored OAuth session (Twitch requirement) —
     // stamps last_validated, reactively refreshes confirmed-expired tokens,

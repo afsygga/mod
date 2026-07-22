@@ -593,6 +593,123 @@ adminRouter.delete('/streams', async (req: Request, res: Response) => {
   }
 });
 
+// ── Steam → Twitch ───────────────────────────────────────────────────────────
+// Состояние фичи целиком: глобальные настройки, привязки каналов, снимок того,
+// что Steam показывает прямо сейчас, и словарь соответствий имён.
+adminRouter.get('/steam', async (_req: Request, res: Response) => {
+  try {
+    const [{ rows: links }, { rows: settings }, { rows: mappings }] = await Promise.all([
+      db.query(`SELECT l.*, (s.channel_name IS NOT NULL) AS is_live
+                FROM steam_links l
+                LEFT JOIN (SELECT DISTINCT channel_name FROM stream_sessions WHERE ended_at IS NULL) s
+                  ON LOWER(s.channel_name) = LOWER(l.channel_name)
+                ORDER BY l.channel_name`),
+      db.query("SELECT key, value FROM settings WHERE key IN ('steam_sync_enabled','steam_exit_category')"),
+      db.query('SELECT steam_game, twitch_category FROM steam_category_map ORDER BY steam_game'),
+    ]);
+    const cfg: Record<string, string> = {};
+    settings.forEach((r: any) => { cfg[r.key] = r.value; });
+    const sync: any = (global as any).steamSync;
+    res.json({
+      enabled: cfg.steam_sync_enabled === 'true',
+      exit_category: cfg.steam_exit_category || '',
+      api_key_set: !!process.env.STEAM_API_KEY,
+      links,
+      seen: sync?.getSeen ? sync.getSeen() : {},
+      mappings,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'steam state failed' });
+  }
+});
+
+adminRouter.put('/steam/settings', async (req: Request, res: Response) => {
+  const { enabled, exit_category } = req.body;
+  try {
+    const put = (key: string, value: string) => db.query(
+      `INSERT INTO settings (key, value) VALUES ($1,$2)
+       ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=NOW()`, [key, value]
+    );
+    if (enabled !== undefined) await put('steam_sync_enabled', enabled ? 'true' : 'false');
+    if (exit_category !== undefined) await put('steam_exit_category', String(exit_category).trim());
+    recordAudit(req.user?.email || 'unknown', 'steam_settings',
+      JSON.stringify({ enabled, exit_category }));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'steam settings failed' });
+  }
+});
+
+// Привязка канала к Steam-аккаунту. steam_id64 — 17-значный, ожидаем именно его
+// (vanity-URL Twitch-у не поможет и молча ничего не найдёт).
+adminRouter.put('/steam/links', async (req: Request, res: Response) => {
+  const { channel, steam_id64, enabled = true } = req.body;
+  const ch = String(channel || '').toLowerCase().trim();
+  const sid = String(steam_id64 || '').trim();
+  if (!ch) return res.status(400).json({ error: 'channel required' });
+  if (!/^\d{17}$/.test(sid)) return res.status(400).json({ error: 'steam_id64 must be 17 digits' });
+  try {
+    await db.query(
+      `INSERT INTO steam_links (channel_name, steam_id64, enabled)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (channel_name) DO UPDATE SET steam_id64=$2, enabled=$3`,
+      [ch, sid, !!enabled]
+    );
+    recordAudit(req.user?.email || 'unknown', 'steam_link', `${ch} → ${sid} (${enabled ? 'on' : 'off'})`);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'steam link failed' });
+  }
+});
+
+adminRouter.delete('/steam/links/:channel', async (req: Request, res: Response) => {
+  try {
+    await db.query('DELETE FROM steam_links WHERE channel_name=$1', [req.params.channel.toLowerCase()]);
+    recordAudit(req.user?.email || 'unknown', 'steam_unlink', req.params.channel);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'steam unlink failed' });
+  }
+});
+
+adminRouter.put('/steam/mappings', async (req: Request, res: Response) => {
+  const steamGame = String(req.body.steam_game || '').trim();
+  const category = String(req.body.twitch_category || '').trim();
+  if (!steamGame || !category) return res.status(400).json({ error: 'both fields required' });
+  try {
+    await db.query(
+      `INSERT INTO steam_category_map (steam_game, twitch_category) VALUES ($1,$2)
+       ON CONFLICT (steam_game) DO UPDATE SET twitch_category=$2`,
+      [steamGame, category]
+    );
+    recordAudit(req.user?.email || 'unknown', 'steam_mapping', `${steamGame} → ${category}`);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'steam mapping failed' });
+  }
+});
+
+adminRouter.delete('/steam/mappings/:game', async (req: Request, res: Response) => {
+  try {
+    await db.query('DELETE FROM steam_category_map WHERE steam_game=$1', [req.params.game]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'steam mapping delete failed' });
+  }
+});
+
+adminRouter.post('/steam/sync', async (req: Request, res: Response) => {
+  try {
+    const sync: any = (global as any).steamSync;
+    if (!sync?.runNow) return res.status(503).json({ error: 'steam sync not running' });
+    const result = await sync.runNow();
+    recordAudit(req.user?.email || 'unknown', 'steam_sync_now', result);
+    res.json({ success: true, result });
+  } catch (err) {
+    res.status(500).json({ error: 'steam sync failed' });
+  }
+});
+
 // Stream sessions list
 adminRouter.get('/streams', async (req: Request, res: Response) => {
   try {
