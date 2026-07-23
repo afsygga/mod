@@ -58,6 +58,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState<string>('all');
   const [channelFilter, setChannelFilter] = useState<string>('all');
+  const [modFilter, setModFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | '7d' | '30d'>('all');
   const [refreshing, setRefreshing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ id?: number; all?: boolean } | null>(null);
@@ -109,6 +110,17 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
     return Array.from(set);
   }, [logs]);
 
+  // Модераторы, встречающиеся в загруженных логах. AUTO и служебные актёры
+  // отсеиваются — это не люди, фильтровать по ним смысла нет.
+  const moderators = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of logs) {
+      const m = l.performed_by_display || l.performed_by;
+      if (m && !['AUTO', 'console', 'bulk', 'dashboard'].includes(l.performed_by)) set.add(m);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [logs]);
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
     const now = Date.now();
@@ -120,10 +132,17 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
         const span = ranges[dateFilter];
         if (now - new Date(l.created_at).getTime() > span) return false;
       }
-      if (q && !l.username.toLowerCase().includes(q) && !(l.message || '').toLowerCase().includes(q)) return false;
+      const mod = l.performed_by_display || l.performed_by || '';
+      if (modFilter !== 'all' && mod !== modFilter) return false;
+      // Поиск идёт и по нику модератора: раньше находились только те, КОГО
+      // наказали, а не кто наказал.
+      if (q
+        && !l.username.toLowerCase().includes(q)
+        && !mod.toLowerCase().includes(q)
+        && !(l.message || '').toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [logs, search, actionFilter, channelFilter, dateFilter]);
+  }, [logs, search, actionFilter, channelFilter, dateFilter, modFilter]);
 
   const exportTxt = () => {
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -276,7 +295,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
         }}>
           <Search size={13} style={{ color: 'rgba(255,255,255,0.4)' }} />
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder={lang === 'ru' ? 'Поиск по нику или сообщению...' : 'Search by user or message...'}
+            placeholder={lang === 'ru' ? 'Поиск по нику, модератору или сообщению...' : 'Search by user, moderator or message...'}
             style={{
               flex: 1, background: 'transparent', border: 'none', outline: 'none',
               color: 'rgba(255,255,255,0.9)', fontSize: '12px',
@@ -338,6 +357,21 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
             }}>
             <option value="all">{lang === 'ru' ? 'Все каналы' : 'All channels'}</option>
             {channels.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
+
+        {moderators.length > 1 && (
+          <select value={modFilter} onChange={e => setModFilter(e.target.value)}
+            title={lang === 'ru' ? 'Показать действия одного модератора' : 'Show one moderator’s actions'}
+            style={{
+              background: modFilter === 'all' ? 'rgba(255,255,255,0.025)' : 'rgba(160,112,255,0.12)',
+              border: 'none', outline: 'none',
+              color: modFilter === 'all' ? 'rgba(255,255,255,0.7)' : '#a070ff',
+              fontSize: '12px', fontWeight: modFilter === 'all' ? 400 : 600,
+              padding: '7px 11px', borderRadius: '10px', cursor: 'pointer',
+            }}>
+            <option value="all">{lang === 'ru' ? 'Все модераторы' : 'All moderators'}</option>
+            {moderators.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         )}
 

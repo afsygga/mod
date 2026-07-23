@@ -1111,6 +1111,76 @@ interface SteamState {
   mappings: { steam_game: string; twitch_category: string }[];
 }
 
+/** Карточка-раздел в стиле Настроек: цветная плашка иконки, заголовок, подпись. */
+function AdminSection({ title, subtitle, icon: Icon, color = '#a070ff', right, children }: {
+  title: string; subtitle?: string; icon?: any; color?: string;
+  right?: React.ReactNode; children: React.ReactNode;
+}) {
+  return (
+    <div style={{
+      padding: '22px 24px', marginBottom: '16px',
+      background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+      borderRadius: '16px',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: '13px',
+        marginBottom: '4px', paddingBottom: '16px',
+        borderBottom: '1px solid rgba(255,255,255,0.06)',
+      }}>
+        {Icon && (
+          <div style={{
+            width: '38px', height: '38px', borderRadius: '11px', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: `${color}18`, border: `1px solid ${color}33`,
+          }}>
+            <Icon size={18} style={{ color }} />
+          </div>
+        )}
+        <div style={{ paddingTop: Icon ? '2px' : 0, flex: 1, minWidth: 0 }}>
+          <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'rgba(255,255,255,0.92)', letterSpacing: '-0.01em' }}>{title}</h3>
+          {subtitle && <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '4px', lineHeight: 1.5 }}>{subtitle}</p>}
+        </div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Плитка статуса: крупное значение + подпись, цвет несёт смысл. */
+function StatTile({ icon: Icon, label, value, color, hint }: {
+  icon: any; label: string; value: string; color: string; hint?: string;
+}) {
+  return (
+    <div title={hint} style={{
+      padding: '14px 16px', borderRadius: '14px',
+      background: `${color}0f`, border: `1px solid ${color}2e`,
+      display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+        <Icon size={13} style={{ color, flexShrink: 0 }} />
+        <span style={{
+          fontSize: '9px', fontWeight: 700, letterSpacing: '0.1em',
+          textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)',
+        }}>{label}</span>
+      </div>
+      <div style={{
+        fontSize: '15px', fontWeight: 800, color, lineHeight: 1.15,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</div>
+    </div>
+  );
+}
+
+function relTime(iso: string | null): string {
+  if (!iso) return '—';
+  const sec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (sec < 60) return `${sec}с назад`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}м назад`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}ч назад`;
+  return `${Math.floor(sec / 86400)}д назад`;
+}
+
 function SteamTab() {
   const [st, setSt] = useState<SteamState | null>(null);
   const [chan, setChan] = useState('');
@@ -1120,6 +1190,7 @@ function SteamTab() {
   const [mapFrom, setMapFrom] = useState('');
   const [mapTo, setMapTo] = useState('');
   const [exitCat, setExitCat] = useState('');
+  const [showMap, setShowMap] = useState(false);
 
   const load = () => api.get<SteamState>('/api/admin/steam')
     .then(s => { setSt(s); setExitCat(s.exit_category); })
@@ -1140,7 +1211,7 @@ function SteamTab() {
     const c = chan.trim().toLowerCase().replace(/^#/, '');
     const s = sid.trim();
     if (!c) return setErr('Укажи канал');
-    if (!/^\d{17}$/.test(s)) return setErr('SteamID64 — это 17 цифр. Профильная ссылка вида /id/nickname не подойдёт.');
+    if (!/^\d{17}$/.test(s)) return setErr('SteamID64 — это 17 цифр. Ссылка вида /id/nickname не подойдёт: прогони её через steamid.io.');
     try {
       await api.put('/api/admin/steam/links', { channel: c, steam_id64: s, enabled: true });
       setChan(''); setSid('');
@@ -1156,207 +1227,373 @@ function SteamTab() {
     finally { setSyncing(false); }
   };
 
-  if (!st) return <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Загрузка...</div>;
+  if (!st) {
+    return (
+      <div style={{ maxWidth: '720px', margin: '0 auto', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>
+        Загрузка...
+      </div>
+    );
+  }
 
   const inputStyle: React.CSSProperties = {
-    padding: '8px 11px', borderRadius: '9px', fontSize: '12px',
+    padding: '9px 12px', borderRadius: '10px', fontSize: '12px',
     background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
     color: 'rgba(255,255,255,0.9)', outline: 'none',
   };
 
+  const activeLinks = st.links.filter(l => l.enabled);
+  const liveLinks = st.links.filter(l => l.is_live && l.enabled);
+  const inGame = st.links.filter(l => st.seen[l.channel_name]?.game).length;
+  // Готовность к работе = ключ + общий тумблер + хотя бы одна включённая привязка
+  const ready = st.api_key_set && st.enabled && activeLinks.length > 0;
+
   return (
-    <div>
-      <h2 style={{ fontSize: '22px', fontWeight: 700, marginBottom: '4px' }}>Steam → категория</h2>
-      <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>
-        Стример запускает игру в Steam — категория на канале меняется сама.
-        Срабатывает на смену игры, пока канал в эфире.
-      </p>
+    <div style={{ maxWidth: '720px', margin: '0 auto', paddingBottom: '60px' }}>
+      {/* Шапка */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px', marginBottom: '20px' }}>
+        <div style={{
+          width: '46px', height: '46px', borderRadius: '13px', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(160,112,255,0.12)', border: '1px solid rgba(160,112,255,0.28)',
+        }}>
+          <Gamepad2 size={22} style={{ color: '#a070ff' }} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <h2 style={{ fontSize: '22px', fontWeight: 700, letterSpacing: '-0.02em' }}>Steam → категория</h2>
+          <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginTop: '4px', lineHeight: 1.55 }}>
+            Стример запускает игру в Steam — категория на канале меняется сама.
+            Срабатывает на смену игры, пока канал в эфире. Проверка раз в минуту.
+          </p>
+        </div>
+      </div>
+
+      {/* Плитки статуса */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
+        <StatTile
+          icon={KeyRound} label="Ключ Steam"
+          value={st.api_key_set ? 'задан' : 'не задан'}
+          color={st.api_key_set ? '#00c878' : '#ff5959'}
+          hint={st.api_key_set ? 'STEAM_API_KEY есть в окружении бэкенда' : 'STEAM_API_KEY отсутствует — синхронизация спит'}
+        />
+        <StatTile
+          icon={Zap} label="Синхронизация"
+          value={ready ? 'работает' : st.enabled ? 'ждёт настройки' : 'выключена'}
+          color={ready ? '#00c878' : st.enabled ? '#ffc800' : 'rgba(255,255,255,0.45)'}
+          hint={ready ? 'Ключ есть, тумблер включён, каналы привязаны' : 'Нужны ключ, включённый тумблер и хотя бы одна привязка'}
+        />
+        <StatTile
+          icon={Radio} label="В эфире / в игре"
+          value={`${liveLinks.length} / ${inGame}`}
+          color={liveLinks.length > 0 ? '#00e5cc' : 'rgba(255,255,255,0.45)'}
+          hint="Сколько привязанных каналов сейчас стримят и сколько из них запустили игру в Steam"
+        />
+      </div>
 
       {!st.api_key_set && (
         <div style={{
-          padding: '12px 16px', borderRadius: '12px', marginBottom: '16px',
+          display: 'flex', gap: '11px', alignItems: 'flex-start',
+          padding: '14px 16px', borderRadius: '14px', marginBottom: '16px',
           background: 'rgba(255,89,89,0.08)', border: '1px solid rgba(255,89,89,0.25)',
-          fontSize: '12px', color: '#ff8080',
         }}>
-          <b>STEAM_API_KEY не задан</b> в <code>.env</code> на хосте — синхронизация не работает.
-          Ключ берётся на steamcommunity.com/dev/apikey, затем перезапуск бэкенда.
+          <AlertTriangle size={15} style={{ color: '#ff5959', flexShrink: 0, marginTop: '1px' }} />
+          <div style={{ fontSize: '12px', color: '#ffb0b0', lineHeight: 1.55 }}>
+            <b style={{ color: '#ff8080' }}>STEAM_API_KEY не задан.</b> Ключ берётся на{' '}
+            <span style={{ color: '#ffd0d0' }}>steamcommunity.com/dev/apikey</span>, кладётся в{' '}
+            <code style={{ background: 'rgba(0,0,0,0.3)', padding: '1px 5px', borderRadius: '4px' }}>.env</code>{' '}
+            на хосте, после чего бэкенд нужно пересоздать. Пока ключа нет, всё ниже сохраняется, но не работает.
+          </div>
         </div>
       )}
 
-      {/* Глобальный переключатель */}
-      <div className="glass-card" style={{ padding: '16px 18px', marginBottom: '14px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+      {/* Основные настройки */}
+      <AdminSection
+        icon={Zap} color="#ffc800" title="Основные настройки"
+        subtitle="Общий выключатель гасит синхронизацию на всех каналах разом. Привязки при этом сохраняются.">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', paddingTop: '16px' }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>
-              Синхронизация включена
+              Менять категорию автоматически
             </div>
-            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '3px' }}>
-              Общий выключатель. Привязки каналов сохраняются даже когда он выключен.
+            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '3px', lineHeight: 1.5 }}>
+              Ручная правка категории не откатывается — она живёт до запуска следующей игры.
             </div>
           </div>
           <button onClick={() => saveSettings({ enabled: !st.enabled })} style={{
-            width: '42px', height: '23px', borderRadius: '12px', cursor: 'pointer',
-            border: 'none', padding: 0, position: 'relative',
+            width: '44px', height: '24px', borderRadius: '12px', cursor: 'pointer',
+            border: 'none', padding: 0, position: 'relative', flexShrink: 0,
             background: st.enabled ? '#00c878' : 'rgba(255,255,255,0.12)',
             transition: 'background 0.15s',
           }}>
             <span style={{
-              position: 'absolute', top: '3px', left: st.enabled ? '22px' : '3px',
-              width: '17px', height: '17px', borderRadius: '50%', background: '#fff',
+              position: 'absolute', top: '3px', left: st.enabled ? '23px' : '3px',
+              width: '18px', height: '18px', borderRadius: '50%', background: '#fff',
               transition: 'left 0.15s',
             }} />
           </button>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '14px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '14px',
+          marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.05)',
+        }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>
               При выходе из игры
             </div>
-            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '3px' }}>
-              Пусто — не трогать категорию. Иначе переключать на указанную (например Just Chatting).
+            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '3px', lineHeight: 1.5 }}>
+              Пусто — не трогать категорию, чтобы альт-таб её не ронял.
+              Иначе переключать на указанную.
             </div>
           </div>
           <input value={exitCat} onChange={e => setExitCat(e.target.value)}
             onBlur={() => { if (exitCat !== st.exit_category) saveSettings({ exit_category: exitCat }); }}
-            placeholder="не трогать" style={{ ...inputStyle, width: '160px' }} />
+            placeholder="не трогать"
+            style={{ ...inputStyle, width: '170px', flexShrink: 0 }} />
         </div>
-      </div>
+      </AdminSection>
 
-      {/* Привязки */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-        <h3 style={{ fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.75)', flex: 1 }}>
-          Привязанные каналы
-        </h3>
-        <button onClick={syncNow} disabled={syncing} style={{
-          padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600,
-          cursor: syncing ? 'default' : 'pointer', border: '1px solid rgba(255,255,255,0.1)',
-          background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.7)',
-          opacity: syncing ? 0.5 : 1,
-        }}>
-          {syncing ? 'Синхронизация...' : 'Синхронизировать сейчас'}
-        </button>
-      </div>
-
-      <div className="glass-card" style={{ overflow: 'hidden', marginBottom: '14px' }}>
+      {/* Каналы */}
+      <AdminSection
+        icon={Tv2} color="#00e5cc" title="Привязанные каналы"
+        subtitle="Канал ↔ SteamID64 стримера. Смену категории делает токен самого стримера — тот же, что нужен для !g."
+        right={
+          <button onClick={syncNow} disabled={syncing} style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            padding: '7px 12px', borderRadius: '9px', fontSize: '11px', fontWeight: 600,
+            cursor: syncing ? 'default' : 'pointer', flexShrink: 0,
+            border: '1px solid rgba(255,255,255,0.1)',
+            background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.7)',
+            opacity: syncing ? 0.5 : 1,
+          }}>
+            <RefreshCw size={11} style={{ animation: syncing ? 'spin 1s linear infinite' : undefined }} />
+            {syncing ? 'Проверяю...' : 'Проверить сейчас'}
+          </button>
+        }>
         {st.links.length === 0 ? (
-          <div style={{ padding: '28px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>
+          <div style={{
+            padding: '26px', textAlign: 'center', marginTop: '16px',
+            color: 'rgba(255,255,255,0.28)', fontSize: '12px',
+            border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '12px',
+          }}>
             Ни один канал не привязан
           </div>
-        ) : st.links.map(l => {
-          const seen = st.seen[l.channel_name];
-          return (
-            <div key={l.channel_name} style={{
-              display: 'flex', alignItems: 'center', gap: '12px',
-              padding: '12px 18px', borderBottom: '1px solid rgba(255,255,255,0.04)',
-            }}>
-              <span title={l.is_live ? 'В эфире' : 'Офлайн'} style={{
-                width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-                background: l.is_live ? '#00c878' : 'rgba(255,255,255,0.15)',
-              }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.92)' }}>
-                  {l.channel_name}
-                  {!l.enabled && (
-                    <span style={{ marginLeft: '8px', fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>выключен</span>
+        ) : (
+          <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {st.links.map(l => {
+              const seen = st.seen[l.channel_name];
+              const privateProfile = seen && !seen.visible;
+              const game = seen?.game || null;
+              return (
+                <div key={l.channel_name} style={{
+                  padding: '13px 15px', borderRadius: '13px',
+                  background: l.enabled ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.012)',
+                  border: `1px solid ${l.is_live && l.enabled ? 'rgba(0,200,120,0.22)' : 'rgba(255,255,255,0.05)'}`,
+                  opacity: l.enabled ? 1 : 0.55,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span title={l.is_live ? 'В эфире' : 'Офлайн'} style={{
+                      width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                      background: l.is_live ? '#00c878' : 'rgba(255,255,255,0.18)',
+                      boxShadow: l.is_live ? '0 0 8px rgba(0,200,120,0.6)' : undefined,
+                    }} />
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.92)' }}>
+                      {l.channel_name}
+                    </span>
+                    {l.is_live && (
+                      <span style={{
+                        fontSize: '9px', fontWeight: 800, letterSpacing: '0.1em',
+                        color: '#00c878', background: 'rgba(0,200,120,0.12)',
+                        padding: '2px 7px', borderRadius: '20px',
+                      }}>LIVE</span>
+                    )}
+                    {!l.enabled && (
+                      <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>выключен</span>
+                    )}
+
+                    <span style={{ flex: 1 }} />
+
+                    <button
+                      onClick={() => api.put('/api/admin/steam/links', {
+                        channel: l.channel_name, steam_id64: l.steam_id64, enabled: !l.enabled,
+                      }).then(load)}
+                      style={{
+                        padding: '5px 11px', borderRadius: '8px', fontSize: '11px', cursor: 'pointer',
+                        border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)',
+                        color: 'rgba(255,255,255,0.6)',
+                      }}>
+                      {l.enabled ? 'Выключить' : 'Включить'}
+                    </button>
+                    <button
+                      onClick={() => api.delete(`/api/admin/steam/links/${l.channel_name}`).then(load)}
+                      title="Убрать привязку"
+                      style={{
+                        padding: '6px', borderRadius: '8px', cursor: 'pointer',
+                        background: 'rgba(240,71,71,0.06)', color: '#ff7070', border: 'none',
+                        display: 'flex', alignItems: 'center',
+                      }}>
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+
+                  {/* Что Steam показывает прямо сейчас */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                    {privateProfile ? (
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '6px',
+                        fontSize: '11px', fontWeight: 600, color: '#ffc800',
+                        background: 'rgba(255,200,0,0.1)', border: '1px solid rgba(255,200,0,0.22)',
+                        padding: '4px 10px', borderRadius: '8px',
+                      }}>
+                        <AlertTriangle size={11} />
+                        Профиль закрыт — Steam не отдаёт игру
+                      </span>
+                    ) : game ? (
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '6px',
+                        fontSize: '11px', fontWeight: 700, color: '#00e5cc',
+                        background: 'rgba(0,229,204,0.1)', border: '1px solid rgba(0,229,204,0.22)',
+                        padding: '4px 10px', borderRadius: '8px',
+                      }}>
+                        <Gamepad2 size={11} />
+                        {game}
+                      </span>
+                    ) : (
+                      <span style={{
+                        fontSize: '11px', color: 'rgba(255,255,255,0.35)',
+                        background: 'rgba(255,255,255,0.03)', padding: '4px 10px', borderRadius: '8px',
+                      }}>
+                        не в игре
+                      </span>
+                    )}
+
+                    <span style={{
+                      fontSize: '10px', color: 'rgba(255,255,255,0.25)',
+                      fontFamily: 'ui-monospace, monospace',
+                    }}>
+                      {l.steam_id64}
+                    </span>
+                    {seen?.personaName && (
+                      <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>
+                        · {seen.personaName}
+                      </span>
+                    )}
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)' }}>
+                      проверено {relTime(l.last_synced_at)}
+                    </span>
+                  </div>
+
+                  {l.last_result && (
+                    <div style={{
+                      marginTop: '9px', paddingTop: '9px',
+                      borderTop: '1px solid rgba(255,255,255,0.04)',
+                      fontSize: '11px', lineHeight: 1.5,
+                      color: l.last_result.startsWith('Категория изменена')
+                        ? 'rgba(0,200,120,0.85)' : '#ff9090',
+                    }}>
+                      {l.last_result}
+                      <span style={{ color: 'rgba(255,255,255,0.25)' }}> · {relTime(l.last_change_at)}</span>
+                    </div>
                   )}
                 </div>
-                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '2px' }}>
-                  {seen && !seen.visible
-                    ? <span style={{ color: '#ffc800' }}>Steam не отдаёт профиль — закрыт приватностью?</span>
-                    : seen?.game
-                      ? <>Сейчас в Steam: <b style={{ color: '#00e5cc' }}>{seen.game}</b></>
-                      : <>Сейчас в Steam: не в игре</>}
-                  {' · '}{l.steam_id64}
-                </div>
-                {l.last_result && (
-                  <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '2px' }}>
-                    Последняя смена: {l.last_result}
-                  </div>
-                )}
-              </div>
-              <button
-                onClick={() => api.put('/api/admin/steam/links', {
-                  channel: l.channel_name, steam_id64: l.steam_id64, enabled: !l.enabled,
-                }).then(load)}
-                style={{
-                  padding: '5px 10px', borderRadius: '8px', fontSize: '11px', cursor: 'pointer',
-                  border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)',
-                  color: 'rgba(255,255,255,0.6)',
-                }}>
-                {l.enabled ? 'Выключить' : 'Включить'}
-              </button>
-              <button
-                onClick={() => api.delete(`/api/admin/steam/links/${l.channel_name}`).then(load)}
-                style={{
-                  padding: '6px 10px', borderRadius: '8px', cursor: 'pointer',
-                  background: 'rgba(240,71,71,0.05)', color: '#ff7070', border: 'none',
-                }}>
-                <Trash2 size={11} />
-              </button>
-            </div>
-          );
-        })}
-
-        <div style={{ display: 'flex', gap: '8px', padding: '12px 18px', alignItems: 'flex-start' }}>
-          <input value={chan} onChange={e => setChan(e.target.value)} placeholder="канал"
-            style={{ ...inputStyle, width: '150px' }} />
-          <input value={sid} onChange={e => setSid(e.target.value)} placeholder="SteamID64 (17 цифр)"
-            style={{ ...inputStyle, flex: 1 }} />
-          <button onClick={addLink} style={{
-            padding: '8px 14px', borderRadius: '9px', fontSize: '12px', fontWeight: 600,
-            cursor: 'pointer', border: 'none', background: 'rgba(255,200,0,0.12)', color: '#ffc800',
-          }}>
-            Привязать
-          </button>
-        </div>
-        {err && (
-          <div style={{ padding: '0 18px 12px', fontSize: '11px', color: '#ff7070' }}>{err}</div>
+              );
+            })}
+          </div>
         )}
-      </div>
 
-      {/* Соответствия имён */}
-      <h3 style={{ fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.75)', marginBottom: '4px' }}>
-        Соответствия названий
-      </h3>
-      <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '10px' }}>
-        Нужны, только если Twitch не находит категорию по названию из Steam.
-        Обычно поиск справляется сам и список остаётся пустым.
-      </p>
-      <div className="glass-card" style={{ overflow: 'hidden' }}>
-        {st.mappings.map(m => (
-          <div key={m.steam_game} style={{
-            display: 'flex', alignItems: 'center', gap: '10px',
-            padding: '10px 18px', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '12px',
-          }}>
-            <span style={{ color: 'rgba(255,255,255,0.75)' }}>{m.steam_game}</span>
-            <span style={{ color: 'rgba(255,255,255,0.25)' }}>→</span>
-            <span style={{ color: '#00e5cc', flex: 1 }}>{m.twitch_category}</span>
-            <button onClick={() => api.delete(`/api/admin/steam/mappings/${encodeURIComponent(m.steam_game)}`).then(load)}
-              style={{ padding: '5px 8px', borderRadius: '7px', cursor: 'pointer', background: 'transparent', color: '#ff7070', border: 'none' }}>
-              <Trash2 size={11} />
+        {/* Добавление */}
+        <div style={{
+          marginTop: '14px', paddingTop: '14px',
+          borderTop: '1px solid rgba(255,255,255,0.05)',
+        }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input value={chan} onChange={e => setChan(e.target.value)} placeholder="канал"
+              style={{ ...inputStyle, width: '150px' }} />
+            <input value={sid} onChange={e => setSid(e.target.value)} placeholder="SteamID64 — 17 цифр"
+              style={{ ...inputStyle, flex: 1 }} />
+            <button onClick={addLink} style={{
+              display: 'flex', alignItems: 'center', gap: '5px',
+              padding: '9px 15px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
+              cursor: 'pointer', border: 'none',
+              background: 'rgba(255,200,0,0.12)', color: '#ffc800',
+            }}>
+              <Plus size={12} />
+              Привязать
             </button>
           </div>
-        ))}
-        <div style={{ display: 'flex', gap: '8px', padding: '12px 18px' }}>
-          <input value={mapFrom} onChange={e => setMapFrom(e.target.value)} placeholder="название в Steam"
-            style={{ ...inputStyle, flex: 1 }} />
-          <input value={mapTo} onChange={e => setMapTo(e.target.value)} placeholder="категория на Twitch"
-            style={{ ...inputStyle, flex: 1 }} />
-          <button
-            onClick={async () => {
-              if (!mapFrom.trim() || !mapTo.trim()) return;
-              await api.put('/api/admin/steam/mappings', { steam_game: mapFrom, twitch_category: mapTo });
-              setMapFrom(''); setMapTo(''); load();
-            }}
-            style={{
-              padding: '8px 14px', borderRadius: '9px', fontSize: '12px', fontWeight: 600,
-              cursor: 'pointer', border: 'none', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)',
-            }}>
-            Добавить
-          </button>
+          {err
+            ? <div style={{ marginTop: '9px', fontSize: '11px', color: '#ff8080', lineHeight: 1.5 }}>{err}</div>
+            : <div style={{ marginTop: '9px', fontSize: '11px', color: 'rgba(255,255,255,0.3)', lineHeight: 1.5 }}>
+                У стримера в Steam должно стоять «Данные об игре» = «Все», иначе игра не видна снаружи.
+              </div>}
         </div>
-      </div>
+      </AdminSection>
+
+      {/* Соответствия названий */}
+      <AdminSection
+        icon={ScrollText} color="#5b9eff" title="Соответствия названий"
+        subtitle="Нужны, только если Twitch не находит категорию по названию из Steam. Обычно поиск справляется сам."
+        right={
+          <button onClick={() => setShowMap(v => !v)} style={{
+            padding: '7px 12px', borderRadius: '9px', fontSize: '11px', fontWeight: 600,
+            cursor: 'pointer', flexShrink: 0, border: '1px solid rgba(255,255,255,0.1)',
+            background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.7)',
+          }}>
+            {showMap ? 'Свернуть' : st.mappings.length > 0 ? `Показать (${st.mappings.length})` : 'Добавить'}
+          </button>
+        }>
+        {showMap && (
+          <div style={{ marginTop: '16px' }}>
+            {st.mappings.length === 0 && (
+              <div style={{
+                padding: '18px', textAlign: 'center', marginBottom: '10px',
+                color: 'rgba(255,255,255,0.28)', fontSize: '12px',
+                border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '12px',
+              }}>
+                Список пуст — Twitch пока находил всё сам
+              </div>
+            )}
+            {st.mappings.map(m => (
+              <div key={m.steam_game} style={{
+                display: 'flex', alignItems: 'center', gap: '10px',
+                padding: '10px 13px', marginBottom: '6px', borderRadius: '11px',
+                background: 'rgba(255,255,255,0.025)', fontSize: '12px',
+              }}>
+                <span style={{ color: 'rgba(255,255,255,0.75)' }}>{m.steam_game}</span>
+                <span style={{ color: 'rgba(255,255,255,0.25)' }}>→</span>
+                <span style={{ color: '#00e5cc', fontWeight: 600, flex: 1 }}>{m.twitch_category}</span>
+                <button onClick={() => api.delete(`/api/admin/steam/mappings/${encodeURIComponent(m.steam_game)}`).then(load)}
+                  style={{
+                    padding: '5px', borderRadius: '7px', cursor: 'pointer',
+                    background: 'transparent', color: '#ff7070', border: 'none',
+                    display: 'flex', alignItems: 'center',
+                  }}>
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+              <input value={mapFrom} onChange={e => setMapFrom(e.target.value)} placeholder="название в Steam"
+                style={{ ...inputStyle, flex: 1 }} />
+              <input value={mapTo} onChange={e => setMapTo(e.target.value)} placeholder="категория на Twitch"
+                style={{ ...inputStyle, flex: 1 }} />
+              <button
+                onClick={async () => {
+                  if (!mapFrom.trim() || !mapTo.trim()) return;
+                  await api.put('/api/admin/steam/mappings', { steam_game: mapFrom, twitch_category: mapTo });
+                  setMapFrom(''); setMapTo(''); load();
+                }}
+                style={{
+                  padding: '9px 15px', borderRadius: '10px', fontSize: '12px', fontWeight: 600,
+                  cursor: 'pointer', border: 'none',
+                  background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)',
+                }}>
+                Добавить
+              </button>
+            </div>
+          </div>
+        )}
+      </AdminSection>
     </div>
   );
 }
