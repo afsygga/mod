@@ -2343,9 +2343,11 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
     return acc;
   }, {});
 
+  const streamsListView = section === 'streams' && !selectedStream && !comparePair;
+
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px' }}>
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+      <div style={{ maxWidth: streamsListView ? '1320px' : '900px', margin: '0 auto' }}>
 
         {/* ── MODS ── */}
         {section === 'mods' && (
@@ -2528,12 +2530,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
         {/* ── STREAMS ── */}
         {section === 'streams' && !selectedStream && !comparePair && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            <div style={{ display: 'flex', gap: '18px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
 
-            {/* Сравнение категорий */}
-            <CategoryComparison channel={selectedChannel} />
-
-            {/* Компактная сводка активности — две карты в ряд */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '12px', marginBottom: '20px', alignItems: 'start' }}>
+            {/* ── ЛЕВЫЙ РЕЙЛ: активность (стопкой) ── */}
+            <div style={{ flex: '0 0 300px', minWidth: '260px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {/* Activity Heatmap */}
             {heatmap.length > 0 && (() => {
               const today = new Date();
@@ -2546,6 +2546,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
               const countMap: Record<string, number> = {};
               heatmap.forEach(h => { countMap[h.day.slice(0, 10)] = h.count; });
               const maxCount = Math.max(...heatmap.map(h => h.count), 1);
+              const total16 = heatmap.reduce((a, h) => a + h.count, 0);
 
               const COLS = 16;
               const ROWS = 7;
@@ -2630,6 +2631,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                       );
                     })}
                   </svg>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>
+                    <span>Σ {total16.toLocaleString()} сообщ.</span>
+                    <span>пик/день {maxCount.toLocaleString()}</span>
+                  </div>
                   {/* Heatmap tooltip */}
                   {heatmapTooltip && (
                     <div style={{
@@ -2692,6 +2697,8 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                   if (c > maxC) maxC = c;
                 }
               });
+              let peakRow = 0, peakHour = 0;
+              grid.forEach((r, ri) => r.forEach((c, hi) => { if (c === maxC) { peakRow = ri; peakHour = hi; } }));
               const CELL = 15, GAP = 3, LEFT = 26, TOP = 16;
               const w = LEFT + 24 * (CELL + GAP);
               const h = TOP + 7 * (CELL + GAP) + 12;
@@ -2732,6 +2739,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                       })
                     )}
                   </svg>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>
+                    <span>Пик: {rowLabels[peakRow]} {String(peakHour).padStart(2, '0')}:00</span>
+                    <span>{maxC.toLocaleString()} сообщ.</span>
+                  </div>
                   {hourCell && (
                     <div style={{
                       position: 'fixed', left: hourCell.x + 8, top: hourCell.y - 10, zIndex: 9998,
@@ -2744,6 +2755,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
               );
             })()}
             </div>
+
+            {/* ── ПРАВАЯ КОЛОНКА: категории + список ── */}
+            <div style={{ flex: '1 1 560px', minWidth: 0 }}>
+            <CategoryComparison channel={selectedChannel} />
 
             {streams.length > 0 && (
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
@@ -2857,6 +2872,8 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                 })}
               </div>
             ))}
+            </div>
+            </div>
           </motion.div>
         )}
 
