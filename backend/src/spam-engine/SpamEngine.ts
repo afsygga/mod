@@ -6,6 +6,12 @@ export interface SpamAnalysis {
   whitelistedFlood?: boolean;
   /** Сколько очков добавил внешний сигнал подозрительности (0 если не применялся) */
   suspicionBonus?: number;
+  /**
+   * Сработал жёсткий блоклист канала (совпадение по границе слова). Вызывающий
+   * заталкивает такое сообщение в очередь модерации без авто-действия — решение
+   * принимает человек. Перекрывает вайтлист и triggerAfterN.
+   */
+  blocklisted?: boolean;
 }
 
 /**
@@ -50,6 +56,13 @@ export interface SpamEngineSettings {
    * Сообщение из этих слов (или содержащее их в основном) пропускается.
    */
   whitelistPhrases: string[];
+  /**
+   * Жёсткий блоклист канала: слова/фразы, при совпадении которых по ГРАНИЦЕ
+   * СЛОВА (не подстрокой) сообщение уходит в очередь модерации со score 100 и
+   * без авто-действия. Матч — по нормализованным токенам, поэтому anti-evasion
+   * (leet→latin→cyrillic) применяется так же, как к остальному тексту.
+   */
+  blocklistPhrases: string[];
   /** Включить агрессивную нормализацию для anti-evasion */
   antiEvasion: boolean;
 }
@@ -63,6 +76,7 @@ export const defaultSettings: SpamEngineSettings = {
   linkDetection: true,
   triggerAfterN: 1,
   whitelistPhrases: [],
+  blocklistPhrases: [],
   antiEvasion: true,
 };
 
@@ -115,6 +129,26 @@ function normalizeAggressive(text: string): string {
 
 function tokenize(text: string): string[] {
   return normalize(text).split(' ').filter(Boolean);
+}
+
+/**
+ * Совпадение фразы по ГРАНИЦЕ СЛОВА: фраза считается найденной, только если её
+ * токены встречаются как непрерывная последовательность целых токенов сообщения.
+ * Работает по уже нормализованным (пробел-разделённым) токенам, поэтому корректен
+ * для кириллицы — в отличие от `\b` в JS-регэкспе, который ASCII-only. Одиночная
+ * фраза "ass" совпадёт с токеном "ass", но НЕ внутри "assassin".
+ */
+function phraseInTokens(msgTokens: string[], phraseTokens: string[]): boolean {
+  const n = phraseTokens.length;
+  if (n === 0 || msgTokens.length < n) return false;
+  for (let i = 0; i + n <= msgTokens.length; i++) {
+    let hit = true;
+    for (let j = 0; j < n; j++) {
+      if (msgTokens[i + j] !== phraseTokens[j]) { hit = false; break; }
+    }
+    if (hit) return true;
+  }
+  return false;
 }
 
 function tokenCounts(tokens: string[]): Map<string, number> {
@@ -261,6 +295,24 @@ export class SpamEngine {
     profile.history.push(cur);
     if (profile.history.length > 50) {
       profile.history.splice(0, profile.history.length - 50);
+    }
+
+    // === BLOCKLIST CHECK ===
+    // Жёсткий контентный фильтр канала. Идёт ПЕРЕД вайтлистом (перекрывает его) и
+    // не зависит от triggerAfterN. Матч по границе слова на нормализованных
+    // токенах — той же формы (aggr при anti-evasion), что использует детект, так
+    // что leet/латиница→кириллица не помогают обойти. Результат — score 100 и
+    // флаг blocklisted; авто-действие НЕ применяется, решает человек (см. вызов).
+    if (this.settings.blocklistPhrases.length > 0) {
+      const useAggr = this.settings.antiEvasion;
+      const msgTokens = (useAggr ? cur.aggr : msgBasicNorm).split(' ').filter(Boolean);
+      for (const phrase of this.settings.blocklistPhrases) {
+        const pnorm = useAggr ? normalizeAggressive(phrase) : normalize(phrase);
+        const phraseTokens = pnorm.split(' ').filter(Boolean);
+        if (phraseInTokens(msgTokens, phraseTokens)) {
+          return { score: 100, reasons: [`blocklist: ${phrase.trim()}`], similarityPct: 0, blocklisted: true };
+        }
+      }
     }
 
     // === WHITELIST CHECK ===

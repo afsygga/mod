@@ -1,12 +1,13 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sliders, Clock, ShieldCheck, Tv2, MessageSquare, Save, Check, Volume2, ListChecks, Send } from 'lucide-react';
+import { Sliders, Clock, ShieldCheck, Tv2, MessageSquare, Save, Check, Volume2, ListChecks, Send, Ban } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Channel, AppSettings } from '../../types';
 import { api } from '../../hooks/useApi';
 import { T, Lang } from '../../utils/i18n';
 import { SoundSettings } from './SoundSettings';
 import { WhitelistSettings } from './WhitelistSettings';
+import { BlocklistSettings } from './BlocklistSettings';
 import { TelegramSettings } from './TelegramSettings';
 import { Footer } from '../Footer/Footer';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -341,6 +342,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
     { id: 'sounds', icon: Volume2, color: '#ffc800', label: lang === 'ru' ? 'Звуки' : 'Sounds' },
     { id: 'telegram', icon: Send, color: '#7eaaff', label: 'Telegram' },
     { id: 'whitelist', icon: ListChecks, color: '#00c878', label: lang === 'ru' ? 'Whitelist' : 'Whitelist' },
+    { id: 'blocklist', icon: Ban, color: '#ff5959', label: lang === 'ru' ? 'Блоклист' : 'Blocklist' },
     { id: 'channels', icon: Tv2, color: '#a070ff', label: lang === 'ru' ? 'Каналы' : 'Channels' },
   ];
 
@@ -532,6 +534,13 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
             <Section icon={ListChecks} color="#00c878" title={lang === 'ru' ? 'Whitelist фраз' : 'Whitelist phrases'}
               subtitle={lang === 'ru' ? 'Фразы которые НЕ считаются спамом (per-channel)' : 'Phrases that won\'t be flagged as spam (per-channel)'}>
               <WhitelistSettings channels={channels} lang={lang} />
+            </Section>
+          </div>
+
+          <div id="sec-blocklist">
+            <Section icon={Ban} color="#ff5959" title={lang === 'ru' ? 'Блоклист фраз' : 'Blocklist phrases'}
+              subtitle={lang === 'ru' ? 'Слова/фразы → сразу в очередь модерации (per-channel)' : 'Words/phrases → straight to the moderation queue (per-channel)'}>
+              <BlocklistSettings channels={channels} lang={lang} />
             </Section>
           </div>
 

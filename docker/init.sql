@@ -122,6 +122,17 @@ CREATE TABLE IF NOT EXISTS channel_whitelist (
 );
 CREATE INDEX IF NOT EXISTS idx_whitelist_channel ON channel_whitelist(channel_name);
 
+-- Per-channel hard content blocklist — a word-boundary match forces the message
+-- into the moderation queue (no auto-action; a human decides)
+CREATE TABLE IF NOT EXISTS channel_blocklist (
+  id SERIAL PRIMARY KEY,
+  channel_name VARCHAR(64) NOT NULL,
+  phrase TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(channel_name, phrase)
+);
+CREATE INDEX IF NOT EXISTS idx_blocklist_channel ON channel_blocklist(channel_name);
+
 -- Cache of Twitch user metadata (for bot profiling)
 CREATE TABLE IF NOT EXISTS twitch_user_meta (
   username VARCHAR(64) PRIMARY KEY,

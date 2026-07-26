@@ -18,6 +18,7 @@ import { WebSocketServer } from 'ws';
 import { db } from './database/db';
 import { channelRouter } from './channels/channelRouter';
 import { whitelistRouter } from './channels/whitelistRouter';
+import { blocklistRouter } from './channels/blocklistRouter';
 import { moderationRouter } from './moderation/moderationRouter';
 import { settingsRouter } from './channels/settingsRouter';
 import { logsRouter } from './moderation/logsRouter';
@@ -103,6 +104,7 @@ app.use('/api/admin', adminRouter);
 // Protected — all moderation/channel routes require authentication
 app.use('/api/channels', authenticate, channelRouter);
 app.use('/api/whitelist', authenticate, whitelistRouter);
+app.use('/api/blocklist', authenticate, blocklistRouter);
 app.use('/api/moderation', authenticate, moderationRouter);
 app.use('/api/settings', authenticate, settingsRouter);
 app.use('/api/logs', authenticate, logsRouter);
@@ -160,6 +162,18 @@ async function runMigrations() {
       )
     `);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_whitelist_channel ON channel_whitelist(channel_name)`);
+    // Per-channel hard content blocklist — mirror of channel_whitelist. A
+    // word-boundary match forces the message into the moderation queue (§ spam).
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS channel_blocklist (
+        id SERIAL PRIMARY KEY,
+        channel_name VARCHAR(64) NOT NULL,
+        phrase TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(channel_name, phrase)
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_blocklist_channel ON channel_blocklist(channel_name)`);
     await db.query(`
       CREATE TABLE IF NOT EXISTS twitch_user_meta (
         username VARCHAR(64) PRIMARY KEY,

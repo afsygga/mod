@@ -320,19 +320,30 @@ export class TwitchManager {
     const threshold = state.engine.settings.detectThreshold;
     const autoMuteThreshold = state.engine.settings.autoMuteThreshold;
 
+    // Hard content blocklist: force into the moderation queue regardless of
+    // triggerAfterN / whitelist / ignored roles, but NEVER auto-action — a human
+    // decides. The channel owner is exempt (never flag the broadcaster).
+    const blocklistHit = !!analysis.blocklisted && role !== 'broadcaster';
+
     // Exactly one terminal spam decision per analyzed message.
     const isSpam = analysis.score >= threshold;
     const willAutomod = isSpam && analysis.score >= autoMuteThreshold && !analysis.whitelistedFlood
-      && cachedSettings.autoMode && state.autoMod !== false && !roleIgnored;
+      && !analysis.blocklisted && cachedSettings.autoMode && state.autoMod !== false && !roleIgnored;
     recordSpamDecision(
-      isSpam && roleIgnored ? 'role_ignored'
+      blocklistHit ? 'blocklist'
+      : analysis.blocklisted ? 'role_ignored'        // blocklist hit on the exempt broadcaster
+      : isSpam && roleIgnored ? 'role_ignored'
       : analysis.whitelistedFlood ? 'whitelist_suppressed'
       : willAutomod ? 'automod'
       : isSpam ? 'queued'
       : 'clean'
     );
 
-    if (analysis.score >= threshold && !roleIgnored) {
+    // Blocklist hits skip the normal score/role gate entirely; everything else
+    // still needs score >= threshold and a non-ignored role.
+    const enqueue = blocklistHit
+      || (!analysis.blocklisted && analysis.score >= threshold && !roleIgnored);
+    if (enqueue) {
       const susRec = getSuspicionRecord(channelName, username);
       broadcast(this.wss, {
         type: 'queue_add', channel: channelName, username,
@@ -355,9 +366,10 @@ export class TwitchManager {
         });
       }
 
-      // Whitelisted-emote floods go to the queue but are never auto-muted —
-      // hype-moment emote triples are common legit behavior
-      if (analysis.score >= autoMuteThreshold && !analysis.whitelistedFlood) {
+      // Whitelisted-emote floods and blocklist hits go to the queue but are
+      // never auto-muted — hype-moment emote triples are common legit behavior,
+      // and blocklist matches are left for a human to confirm.
+      if (analysis.score >= autoMuteThreshold && !analysis.whitelistedFlood && !analysis.blocklisted) {
         if (cachedSettings.autoMode && state.autoMod !== false) {
           await this.muteUser(channelName, username, cachedSettings.defaultMuteDuration, 'AUTO');
         }
@@ -439,6 +451,8 @@ export class TwitchManager {
       }
       const wl = await db.query('SELECT phrase FROM channel_whitelist WHERE channel_name=$1', [channelName]);
       channelSettings.whitelistPhrases = wl.rows.map((r: any) => r.phrase);
+      const bl = await db.query('SELECT phrase FROM channel_blocklist WHERE channel_name=$1', [channelName]);
+      channelSettings.blocklistPhrases = bl.rows.map((r: any) => r.phrase);
     } catch {}
 
     const engine = new SpamEngine(channelSettings);
@@ -1327,6 +1341,18 @@ export class TwitchManager {
       state.engine.updateSettings({ whitelistPhrases: rows.map((r: any) => r.phrase) });
     } catch (err) {
       logger.error('reloadWhitelist error', err);
+    }
+  }
+
+  /** Reload blocklist phrases for a channel from DB */
+  async reloadBlocklist(channelName: string): Promise<void> {
+    const state = this.channels.get(channelName);
+    if (!state) return;
+    try {
+      const { rows } = await db.query('SELECT phrase FROM channel_blocklist WHERE channel_name=$1', [channelName]);
+      state.engine.updateSettings({ blocklistPhrases: rows.map((r: any) => r.phrase) });
+    } catch (err) {
+      logger.error('reloadBlocklist error', err);
     }
   }
 

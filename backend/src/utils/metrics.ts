@@ -55,7 +55,7 @@ const steamLinks      = G('afsyg_steam_links', 'Channels linked to a Steam accou
 
 // Zero-init known series so alert expressions have a baseline.
 (['self', 'unknown_channel', 'non_primary', 'duplicate', 'command'] as const).forEach(r => chatDropped.labels(r).inc(0));
-(['clean', 'queued', 'automod', 'whitelist_suppressed', 'role_ignored'] as const).forEach(d => spamDecisions.labels(d).inc(0));
+(['clean', 'queued', 'automod', 'whitelist_suppressed', 'role_ignored', 'blocklist'] as const).forEach(d => spamDecisions.labels(d).inc(0));
 (['timeout', 'ban', 'unban'] as const).forEach(a => (['success', 'fallback_success', 'error'] as const).forEach(r => moderationCmds.labels(a, r).inc(0)));
 (['success', 'fallback_success', 'error'] as const).forEach(r => automodActions.labels('timeout', r).inc(0));
 (['message', 'update'] as const).forEach(s => suspicionEvents.labels(s).inc(0));

@@ -47,6 +47,8 @@
 | GET/PUT | `/api/settings` | 🔑 | Глобальные настройки движка (пороги, режимы) |
 | GET/POST | `/api/whitelist/:channel` | 🔑 | Фразы-исключения канала |
 | DELETE | `/api/whitelist/:channel/:id` | 🔑 | Удалить фразу |
+| GET/POST | `/api/blocklist/:channel` | 🔑 | Фразы блоклиста канала (жёсткий фильтр → очередь) |
+| DELETE | `/api/blocklist/:channel/:id` | 🔑 | Удалить фразу блоклиста |
 
 ## Модерация — `/api/moderation`
 
