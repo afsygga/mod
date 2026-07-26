@@ -2215,6 +2215,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const [compareSel, setCompareSel] = useState<number[]>([]);
   const [comparePair, setComparePair] = useState<[StreamSession, StreamSession] | null>(null);
   const heatmapTooltipCache = useRef<Record<string, any>>({});
+  // Какую ячейку сейчас реально держит курсор. Асинхронный фетч детали стрима
+  // применяется, только если указатель всё ещё на той же ячейке — иначе тултип
+  // «оживал» после ухода курсора (ответ приходил позже onMouseLeave) и застревал.
+  const heatmapHoverKey = useRef<string | null>(null);
 
   useEffect(() => {
     api.get<{ day: string; count: number }[]>('/api/streams/heatmap').then(setHeatmap).catch(() => {});
@@ -2306,6 +2310,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const handleHeatmapHover = useCallback(async (e: React.MouseEvent, date: Date, count: number) => {
     const key = date.toISOString().slice(0, 10);
     const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
+    heatmapHoverKey.current = key;
     if (heatmapTooltipCache.current[key] !== undefined) {
       setHeatmapTooltip({ x: rect.left + rect.width / 2, y: rect.top, date: key, count, streamInfo: heatmapTooltipCache.current[key] });
       return;
@@ -2315,9 +2320,12 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
     try {
       const info = await api.get<any>(`/api/streams/heatmap-detail?date=${key}${chParam}`);
       heatmapTooltipCache.current[key] = info;
+      // Курсор мог уйти с ячейки, пока шёл запрос — тогда тултип не воскрешаем.
+      if (heatmapHoverKey.current !== key) return;
       setHeatmapTooltip({ x: rect.left + rect.width / 2, y: rect.top, date: key, count, streamInfo: info });
     } catch {
       heatmapTooltipCache.current[key] = null;
+      if (heatmapHoverKey.current !== key) return;
       setHeatmapTooltip({ x: rect.left + rect.width / 2, y: rect.top, date: key, count, streamInfo: null });
     }
   }, [selectedChannel]);
@@ -2524,6 +2532,8 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
             {/* Сравнение категорий */}
             <CategoryComparison channel={selectedChannel} />
 
+            {/* Компактная сводка активности — две карты в ряд */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '12px', marginBottom: '20px', alignItems: 'start' }}>
             {/* Activity Heatmap */}
             {heatmap.length > 0 && (() => {
               const today = new Date();
@@ -2573,12 +2583,13 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
               const svgH = 18 + ROWS * (CELL + GAP);
 
               return (
-                <div style={{ marginBottom: '24px', padding: '18px 20px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', position: 'relative' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '14px' }}>
-                    Активность за 16 недель
+                <div style={{ padding: '14px 16px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', position: 'relative' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '12px' }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '2px', background: '#00c878', opacity: 0.8 }} />
+                    <span style={{ fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.45)', letterSpacing: '0.06em' }}>16 недель</span>
                   </div>
                   <svg viewBox={`0 0 ${svgW} ${svgH}`} style={{ width: '100%', maxWidth: `${svgW}px`, height: 'auto', display: 'block', overflow: 'visible' }}
-                    onMouseLeave={() => setHeatmapTooltip(null)}>
+                    onMouseLeave={() => { heatmapHoverKey.current = null; setHeatmapTooltip(null); }}>
                     {/* Month labels */}
                     {monthLabels.map(({ col, label }) => (
                       <text key={label + col} x={LEFT_PAD + col * (CELL + GAP)} y={10}
@@ -2685,9 +2696,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
               const w = LEFT + 24 * (CELL + GAP);
               const h = TOP + 7 * (CELL + GAP) + 12;
               return (
-                <div style={{ marginBottom: '24px', padding: '18px 20px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', position: 'relative' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '14px' }}>
-                    Активность: час × день
+                <div style={{ padding: '14px 16px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', position: 'relative' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '12px' }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '2px', background: '#00c878', opacity: 0.8 }} />
+                    <span style={{ fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.45)', letterSpacing: '0.06em' }}>Час × день</span>
                   </div>
                   <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', maxWidth: `${w}px`, height: 'auto', display: 'block', overflow: 'visible' }}
                     onMouseLeave={() => setHourCell(null)}>
@@ -2731,6 +2743,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
                 </div>
               );
             })()}
+            </div>
 
             {streams.length > 0 && (
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
