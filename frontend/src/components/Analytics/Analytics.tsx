@@ -979,6 +979,10 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
               <span style={{ width: '10px', height: '2px', borderRadius: '1px', background: '#00e5cc', display: 'inline-block' }} />
               Спам
             </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'rgba(255,255,255,0.4)' }} title="Доля спама от всех сообщений за минуту">
+              <span style={{ width: '10px', height: '6px', borderRadius: '2px', background: 'linear-gradient(90deg, rgba(255,89,89,0.2), #ff5959)', display: 'inline-block' }} />
+              Спам-давление
+            </span>
           </div>
         </div>
 
@@ -1029,6 +1033,18 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
               {msgLine && <path d={msgLine} fill="none" stroke="#a070ff" strokeWidth="2" strokeLinecap="round" />}
               {/* Spam line */}
               {spamLine && <path d={spamLine} fill="none" stroke="#00e5cc" strokeWidth="2" strokeLinecap="round" strokeDasharray="0" />}
+              {/* Спам-давление: полоса-heat по доле спама (spam/msgs) за минуту.
+                  Отличает реальную волну спама (высокая доля) от просто активного
+                  чата (много сообщений, но мало спама). msgs=0 или spam=0 → пусто. */}
+              {viewData.map((d, i) => {
+                if (d.msgs <= 0 || d.spam <= 0) return null;
+                const pct = Math.min(1, d.spam / d.msgs);
+                const cw = CHART_W / Math.max(1, viewData.length);
+                return (
+                  <rect key={`sp-${i}`} x={i * cw} y={0} width={Math.max(cw, 1)} height={6}
+                    fill="#ff5959" opacity={0.15 + pct * 0.7} />
+                );
+              })}
             </g>
 
             {/* Смены категории — вертикальные маркеры в момент смены */}
@@ -1096,6 +1112,13 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
                 <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#5b9eff', flexShrink: 0 }} />
                 <span style={{ color: 'rgba(255,255,255,0.6)' }}>Спам-юзеров:</span>
                 <span style={{ color: '#5b9eff', fontWeight: 700, marginLeft: 'auto' }}>{tooltipData.spam_users}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '3px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: '#ff5959', flexShrink: 0 }} />
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>Спам-давление:</span>
+                <span style={{ color: '#ff5959', fontWeight: 700, marginLeft: 'auto' }}>
+                  {tooltipData.msgs > 0 ? Math.round((tooltipData.spam / tooltipData.msgs) * 100) : 0}%
+                </span>
               </div>
               {(() => {
                 const absIdx = viewStart + tooltip.idx;
@@ -2070,6 +2093,104 @@ function DaySummaryCard({ date, summary, error }: { date: string; summary: DaySu
   );
 }
 
+// ─── Сравнение категорий ────────────────────────────────────────────────────
+interface CategoryStat {
+  game: string;
+  segments: number;
+  sessions: number;
+  airtime_sec: number;
+  avg_peak_viewers: number;
+  max_peak_viewers: number;
+  msgs: number;
+  spam: number;
+  mutes: number;
+  bans: number;
+}
+
+const CAT_PALETTE = ['#a070ff', '#00e5cc', '#ffc800', '#00c878', '#5b9eff', '#ff5959', '#ff9f40', '#c77dff'];
+
+function CategoryComparison({ channel }: { channel: string }) {
+  const [rows, setRows] = useState<CategoryStat[]>([]);
+  const [days, setDays] = useState(30);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    const chParam = channel ? `&channel=${encodeURIComponent(channel)}` : '';
+    api.get<CategoryStat[]>(`/api/streams/category-stats?days=${days}${chParam}`)
+      .then(setRows).catch(() => setRows([])).finally(() => setLoading(false));
+  }, [channel, days]);
+
+  const maxAir = Math.max(...rows.map(r => r.airtime_sec), 1);
+  const spamPct = (r: CategoryStat) => r.msgs > 0 ? Math.round((r.spam / r.msgs) * 100) : 0;
+  const mutesPerHr = (r: CategoryStat) => r.airtime_sec > 0 ? (r.mutes / (r.airtime_sec / 3600)) : 0;
+
+  return (
+    <div style={{ marginBottom: '18px', padding: '18px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+        <span style={{ fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.9)' }}>Категории</span>
+        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>что приносит зрителей и что — спам</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
+          {[7, 30, 90].map(d => (
+            <button key={d} onClick={() => setDays(d)} style={{
+              padding: '4px 10px', borderRadius: '7px', cursor: 'pointer', fontSize: '11px', fontWeight: 600,
+              background: days === d ? 'rgba(160,112,255,0.15)' : 'rgba(255,255,255,0.03)',
+              color: days === d ? '#a070ff' : 'rgba(255,255,255,0.5)', border: 'none', outline: 'none',
+            }}>{d}д</button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', padding: '10px 0' }}>Загрузка...</div>
+      ) : rows.length === 0 ? (
+        <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', padding: '10px 0', textAlign: 'center' }}>
+          Нет данных о сменах категории за период
+        </div>
+      ) : (
+        <div>
+          {/* header */}
+          <div style={{ display: 'grid', gridTemplateColumns: '2.4fr 1fr 0.9fr 1fr 0.9fr 1fr', gap: '8px', padding: '0 4px 8px', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.3)', fontWeight: 700 }}>
+            <span>Категория / эфир</span>
+            <span style={{ textAlign: 'right' }}>Ср. зрителей</span>
+            <span style={{ textAlign: 'right' }}>Сообщ.</span>
+            <span style={{ textAlign: 'right' }}>Спам %</span>
+            <span style={{ textAlign: 'right' }}>Мутов/ч</span>
+            <span style={{ textAlign: 'right' }}>Банов</span>
+          </div>
+          {rows.map((r, i) => {
+            const color = CAT_PALETTE[i % CAT_PALETTE.length];
+            const sp = spamPct(r);
+            return (
+              <div key={r.game} style={{ display: 'grid', gridTemplateColumns: '2.4fr 1fr 0.9fr 1fr 0.9fr 1fr', gap: '8px', alignItems: 'center', padding: '9px 4px', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '4px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: color, flexShrink: 0 }} />
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.85)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.game}</span>
+                    <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', flexShrink: 0 }}>{dur(r.airtime_sec)} · {r.sessions} стр.</span>
+                  </div>
+                  {/* airtime share bar */}
+                  <div style={{ height: '4px', borderRadius: '2px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                    <div style={{ width: `${(r.airtime_sec / maxAir) * 100}%`, height: '100%', background: color, borderRadius: '2px' }} />
+                  </div>
+                </div>
+                <span style={{ textAlign: 'right', fontSize: '12px', color: 'rgba(255,255,255,0.8)' }}>{r.avg_peak_viewers || '—'}</span>
+                <span style={{ textAlign: 'right', fontSize: '12px', color: 'rgba(255,255,255,0.6)' }}>{r.msgs.toLocaleString()}</span>
+                <span style={{ textAlign: 'right', fontSize: '12px', fontWeight: 700, color: sp >= 15 ? '#ff5959' : sp >= 5 ? '#ffc800' : 'rgba(255,255,255,0.6)' }}>{sp}%</span>
+                <span style={{ textAlign: 'right', fontSize: '12px', color: 'rgba(255,255,255,0.8)' }}>{mutesPerHr(r).toFixed(1)}</span>
+                <span style={{ textAlign: 'right', fontSize: '12px', color: r.bans > 0 ? '#ff7070' : 'rgba(255,255,255,0.4)' }}>{r.bans}</span>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.25)', marginTop: '10px', lineHeight: 1.5 }}>
+            Эфир и метрики считаются по сегментам категорий внутри стримов. «Ср. зрителей» — средний пик по стримам с этой категорией.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── main ─────────────────────────────────────────────────────────────────────
 export function Analytics({ initialSection, streamEventTick }: { initialSection?: 'mods' | 'streams'; streamEventTick?: number } = {}) {
   const [channels, setChannels] = useState<string[]>([]);
@@ -2399,6 +2520,9 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
         {/* ── STREAMS ── */}
         {section === 'streams' && !selectedStream && !comparePair && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+
+            {/* Сравнение категорий */}
+            <CategoryComparison channel={selectedChannel} />
 
             {/* Activity Heatmap */}
             {heatmap.length > 0 && (() => {

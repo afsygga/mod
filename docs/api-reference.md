@@ -84,6 +84,7 @@
 | Метод | Путь | Auth | Назначение |
 |---|---|---|---|
 | GET | `/api/streams` | 🔑 | Сессии стримов |
+| GET | `/api/streams/category-stats` | 🔑 | Сравнение категорий (эфир/зрители/спам/модерация), `?days=&channel=` |
 | GET | `/api/streams/heatmap`, `/hourly-heatmap`, `/heatmap-detail` | 🔑 | Хитмапы активности |
 | GET | `/api/streams/:id/stats` | 🔑 | Метрики одной сессии |
 | GET | `/api/streams/:id/minute-detail` | 🔑 | Поминутная детализация |

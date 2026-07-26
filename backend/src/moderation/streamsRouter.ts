@@ -25,6 +25,76 @@ streamsRouter.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// Сравнение категорий: сколько эфира, зрителей, спама и модерации приносит
+// каждая категория. Атрибуция по СЕГМЕНТАМ (stream_game_changes), а не по
+// stream_sessions.game (там только текущая категория, §21), поэтому смены внутри
+// стрима учитываются корректно. Сегменты одного канала не пересекаются во
+// времени (один лайв за раз) → сообщение попадает максимум в один сегмент.
+streamsRouter.get('/category-stats', async (req: Request, res: Response) => {
+  try {
+    const days = Math.min(Math.max(parseInt((req.query.days as string) || '30'), 1), 365);
+    const channel = (req.query.channel as string) || null;
+    const { rows } = await db.query(`
+      WITH segbound AS (
+        SELECT
+          g.channel_name,
+          COALESCE(g.game, '—') AS game,
+          g.session_id,
+          s.peak_viewers,
+          g.changed_at AS seg_start,
+          COALESCE(
+            LEAD(g.changed_at) OVER (PARTITION BY g.session_id ORDER BY g.changed_at),
+            s.ended_at, NOW()
+          ) AS seg_end
+        FROM stream_game_changes g
+        JOIN stream_sessions s ON s.id = g.session_id
+        WHERE g.changed_at > NOW() - ($1 * INTERVAL '1 day')
+          AND ($2::text IS NULL OR g.channel_name = $2)
+      ),
+      air AS (
+        SELECT game,
+          COUNT(*)::int AS segments,
+          COUNT(DISTINCT session_id)::int AS sessions,
+          SUM(EXTRACT(EPOCH FROM (seg_end - seg_start)))::bigint AS airtime_sec,
+          ROUND(AVG(peak_viewers))::int AS avg_peak_viewers,
+          MAX(peak_viewers)::int AS max_peak_viewers
+        FROM segbound GROUP BY game
+      ),
+      msg AS (
+        SELECT sb.game,
+          COUNT(m.id)::bigint AS msgs,
+          COUNT(m.id) FILTER (WHERE m.spam_score >= 70)::bigint AS spam
+        FROM segbound sb
+        JOIN messages m ON m.channel_name = sb.channel_name
+          AND m.created_at >= sb.seg_start AND m.created_at < sb.seg_end
+        GROUP BY sb.game
+      ),
+      mod AS (
+        SELECT sb.game,
+          COUNT(ml.id) FILTER (WHERE ml.action IN ('MUTED','AUTO_MUTED'))::bigint AS mutes,
+          COUNT(ml.id) FILTER (WHERE ml.action = 'BANNED')::bigint AS bans
+        FROM segbound sb
+        JOIN moderation_logs ml ON ml.channel_name = sb.channel_name
+          AND ml.created_at >= sb.seg_start AND ml.created_at < sb.seg_end
+        GROUP BY sb.game
+      )
+      SELECT a.game, a.segments, a.sessions, a.airtime_sec,
+        a.avg_peak_viewers, a.max_peak_viewers,
+        COALESCE(mg.msgs, 0)::int AS msgs,
+        COALESCE(mg.spam, 0)::int AS spam,
+        COALESCE(md.mutes, 0)::int AS mutes,
+        COALESCE(md.bans, 0)::int AS bans
+      FROM air a
+      LEFT JOIN msg mg ON mg.game = a.game
+      LEFT JOIN mod md ON md.game = a.game
+      ORDER BY a.airtime_sec DESC NULLS LAST
+    `, [days, channel]);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'category stats failed' });
+  }
+});
+
 // Activity heatmap — daily message counts for last 112 days
 streamsRouter.get('/heatmap', async (req: Request, res: Response) => {
   try {
