@@ -453,6 +453,8 @@ export class TwitchManager {
       channelSettings.whitelistPhrases = wl.rows.map((r: any) => r.phrase);
       const bl = await db.query('SELECT phrase FROM channel_blocklist WHERE channel_name=$1', [channelName]);
       channelSettings.blocklistPhrases = bl.rows.map((r: any) => r.phrase);
+      const la = await db.query('SELECT domain FROM channel_link_allowlist WHERE channel_name=$1', [channelName]);
+      channelSettings.linkAllowlistDomains = la.rows.map((r: any) => r.domain);
     } catch {}
 
     const engine = new SpamEngine(channelSettings);
@@ -1353,6 +1355,18 @@ export class TwitchManager {
       state.engine.updateSettings({ blocklistPhrases: rows.map((r: any) => r.phrase) });
     } catch (err) {
       logger.error('reloadBlocklist error', err);
+    }
+  }
+
+  /** Reload trusted link domains for a channel from DB */
+  async reloadLinkAllowlist(channelName: string): Promise<void> {
+    const state = this.channels.get(channelName);
+    if (!state) return;
+    try {
+      const { rows } = await db.query('SELECT domain FROM channel_link_allowlist WHERE channel_name=$1', [channelName]);
+      state.engine.updateSettings({ linkAllowlistDomains: rows.map((r: any) => r.domain) });
+    } catch (err) {
+      logger.error('reloadLinkAllowlist error', err);
     }
   }
 

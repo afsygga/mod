@@ -133,6 +133,17 @@ CREATE TABLE IF NOT EXISTS channel_blocklist (
 );
 CREATE INDEX IF NOT EXISTS idx_blocklist_channel ON channel_blocklist(channel_name);
 
+-- Per-channel trusted link domains — links whose hosts are all listed here skip
+-- the link-detection spam penalty
+CREATE TABLE IF NOT EXISTS channel_link_allowlist (
+  id SERIAL PRIMARY KEY,
+  channel_name VARCHAR(64) NOT NULL,
+  domain VARCHAR(190) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(channel_name, domain)
+);
+CREATE INDEX IF NOT EXISTS idx_link_allowlist_channel ON channel_link_allowlist(channel_name);
+
 -- Cache of Twitch user metadata (for bot profiling)
 CREATE TABLE IF NOT EXISTS twitch_user_meta (
   username VARCHAR(64) PRIMARY KEY,

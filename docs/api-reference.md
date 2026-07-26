@@ -23,6 +23,8 @@
 | POST | `/api/auth/google` | 🌐 | Google-логин, проверка по whitelist → сессия |
 | POST | `/api/auth/logout` | 🔑 | Завершить сессию |
 | GET | `/api/auth/me` | 🔑 | Текущий пользователь |
+| GET | `/api/auth/sessions` | 🔑 | Свои активные сессии (устройство, время, текущая) |
+| DELETE | `/api/auth/sessions/:id` | 🔑 | Отозвать свою сессию по публичному id (префикс sha256) |
 | GET | `/api/auth/config` | 🌐 | Публичный конфиг фронта (GSI client id и т.п.) |
 
 ## Twitch-креденшелы и OAuth
@@ -49,6 +51,8 @@
 | DELETE | `/api/whitelist/:channel/:id` | 🔑 | Удалить фразу |
 | GET/POST | `/api/blocklist/:channel` | 🔑 | Фразы блоклиста канала (жёсткий фильтр → очередь) |
 | DELETE | `/api/blocklist/:channel/:id` | 🔑 | Удалить фразу блоклиста |
+| GET/POST | `/api/link-allowlist/:channel` | 🔑 | Доверенные домены ссылок (ссылка на них не штрафуется) |
+| DELETE | `/api/link-allowlist/:channel/:id` | 🔑 | Удалить домен |
 
 ## Модерация — `/api/moderation`
 

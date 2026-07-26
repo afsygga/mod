@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sliders, Clock, ShieldCheck, Tv2, MessageSquare, Save, Check, Volume2, ListChecks, Send, Ban } from 'lucide-react';
+import { Sliders, Clock, ShieldCheck, Tv2, MessageSquare, Save, Check, Volume2, ListChecks, Send, Ban, Link2, Monitor } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Channel, AppSettings } from '../../types';
 import { api } from '../../hooks/useApi';
@@ -8,6 +8,8 @@ import { T, Lang } from '../../utils/i18n';
 import { SoundSettings } from './SoundSettings';
 import { WhitelistSettings } from './WhitelistSettings';
 import { BlocklistSettings } from './BlocklistSettings';
+import { LinkAllowlistSettings } from './LinkAllowlistSettings';
+import { SessionsSettings } from './SessionsSettings';
 import { TelegramSettings } from './TelegramSettings';
 import { Footer } from '../Footer/Footer';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -343,7 +345,9 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
     { id: 'telegram', icon: Send, color: '#7eaaff', label: 'Telegram' },
     { id: 'whitelist', icon: ListChecks, color: '#00c878', label: lang === 'ru' ? 'Whitelist' : 'Whitelist' },
     { id: 'blocklist', icon: Ban, color: '#ff5959', label: lang === 'ru' ? 'Блоклист' : 'Blocklist' },
+    { id: 'links', icon: Link2, color: '#00e5cc', label: lang === 'ru' ? 'Ссылки' : 'Links' },
     { id: 'channels', icon: Tv2, color: '#a070ff', label: lang === 'ru' ? 'Каналы' : 'Channels' },
+    { id: 'sessions', icon: Monitor, color: '#7eaaff', label: lang === 'ru' ? 'Сессии' : 'Sessions' },
   ];
 
   // Scroll-spy: highlight the section currently in view
@@ -544,6 +548,13 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
             </Section>
           </div>
 
+          <div id="sec-links">
+            <Section icon={Link2} color="#00e5cc" title={lang === 'ru' ? 'Доверенные домены' : 'Trusted link domains'}
+              subtitle={lang === 'ru' ? 'Ссылки на эти домены не штрафуются детектом (per-channel)' : 'Links to these domains aren\'t penalised by detection (per-channel)'}>
+              <LinkAllowlistSettings channels={channels} lang={lang} />
+            </Section>
+          </div>
+
           {channels.length > 0 && (
             <div id="sec-channels">
               <Section icon={Tv2} color="#a070ff" title={lang === 'ru' ? 'Настройки каналов' : 'Channel Settings'}
@@ -557,6 +568,13 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
               </Section>
             </div>
           )}
+
+          <div id="sec-sessions">
+            <Section icon={Monitor} color="#7eaaff" title={lang === 'ru' ? 'Сессии' : 'Sessions'}
+              subtitle={lang === 'ru' ? 'Активные входы в твой аккаунт' : 'Active logins to your account'}>
+              <SessionsSettings lang={lang} />
+            </Section>
+          </div>
         </div>
 
         <Footer />

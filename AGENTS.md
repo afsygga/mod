@@ -179,8 +179,12 @@ npm run build             # tsc && vite build
 ## 7. Аутентификация и токены — общая модель
 
 **Вход на сайт:** Google Identity → `authRouter` проверяет email по `whitelist`
-→ выдаёт сессию (Bearer-токен в localStorage, таблица `sessions`). `role` в
-`users` (`user`/`admin`); `/api/admin/*` требует admin.
+→ выдаёт сессию (Bearer-токен в localStorage, таблица `sessions`, при входе
+пишется `user_agent`). `role` в `users` (`user`/`admin`); `/api/admin/*` требует
+admin. Юзер видит/отзывает свои сессии на сайте (Настройки → «Сессии»,
+`GET/DELETE /api/auth/sessions`); список оперирует публичным id = префикс
+`sha256(token)`, сам токен наружу не отдаётся. Ротация статичного бот-токена —
+ручной runbook в [docs/operations.md](docs/operations.md), не действие на сайте.
 
 **Twitch-креденшелы — три независимых источника:**
 1. **Пер-юзер логин** (`users.twitch_oauth` + `users.twitch_refresh`) — обычный
@@ -370,6 +374,12 @@ anti-evasion (leet + latin→cyrillic). `triggerAfterN` — не реагиро�
 Вызывающий заталкивает такое сообщение в очередь (`queue_add`) БЕЗ авто-действия,
 перекрывая вайтлист/`triggerAfterN`/игнор-роли; broadcaster исключён. Настройка —
 вкладка «Блоклист» в Settings, детали — [docs/spam-detection.md](docs/spam-detection.md).
+
+**Link-allowlist** (`linkAllowlistDomains`, таблица `channel_link_allowlist`):
+штраф за ссылку (+20) снимается, если ВСЕ хосты сообщения — доверенные домены
+канала (`host === d || host.endsWith('.'+d)`, покрывает поддомены). Есть хоть
+одна чужая ссылка — штраф остаётся (fail-safe в сторону флага). Настройка —
+вкладка «Ссылки» в Settings.
 
 ---
 

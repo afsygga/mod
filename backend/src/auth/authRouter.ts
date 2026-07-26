@@ -81,9 +81,10 @@ authRouter.post('/google', async (req: Request, res: Response) => {
     // Create session
     const token = newToken();
     const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000);
+    const userAgent = String(req.headers['user-agent'] || '').slice(0, 400);
     await db.query(
-      `INSERT INTO sessions (token, user_id, email, expires_at) VALUES ($1,$2,$3,$4)`,
-      [token, userId, email, expiresAt]
+      `INSERT INTO sessions (token, user_id, email, expires_at, user_agent) VALUES ($1,$2,$3,$4,$5)`,
+      [token, userId, email, expiresAt, userAgent]
     );
 
     res.json({
@@ -105,6 +106,49 @@ authRouter.post('/logout', authenticate, async (req: Request, res: Response) => 
 
 authRouter.get('/me', authenticate, async (req: Request, res: Response) => {
   res.json({ user: req.user });
+});
+
+// Публичный идентификатор сессии — префикс sha256(token). Реальный токен никогда
+// не уходит клиенту, поэтому список сессий нельзя использовать для их угона.
+function sessionId(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
+}
+
+function bearerToken(req: Request): string {
+  const auth = req.headers.authorization || '';
+  return auth.startsWith('Bearer ') ? auth.substring(7) : '';
+}
+
+// Список СВОИХ активных сессий (устройство + когда вошёл + текущая ли она).
+authRouter.get('/sessions', authenticate, async (req: Request, res: Response) => {
+  const current = bearerToken(req);
+  const { rows } = await db.query(
+    `SELECT token, created_at, expires_at, user_agent
+       FROM sessions WHERE user_id=$1 AND expires_at > NOW()
+       ORDER BY created_at DESC`,
+    [req.user!.id]
+  );
+  res.json(rows.map((r: any) => ({
+    id: sessionId(r.token),
+    created_at: r.created_at,
+    expires_at: r.expires_at,
+    user_agent: r.user_agent || null,
+    current: r.token === current,
+  })));
+});
+
+// Отозвать конкретную СВОЮ сессию по её публичному id. Совпадение считается в
+// Node по хэшу, сам токен из БД наружу не отдаётся.
+authRouter.delete('/sessions/:id', authenticate, async (req: Request, res: Response) => {
+  const targetId = req.params.id;
+  const { rows } = await db.query(
+    `SELECT token FROM sessions WHERE user_id=$1`,
+    [req.user!.id]
+  );
+  const match = rows.find((r: any) => sessionId(r.token) === targetId);
+  if (!match) return res.status(404).json({ error: 'session not found' });
+  await db.query('DELETE FROM sessions WHERE token=$1', [match.token]).catch(() => {});
+  res.json({ success: true });
 });
 
 // Public — returns the Google client ID so frontend doesn't need to hardcode

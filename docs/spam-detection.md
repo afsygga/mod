@@ -20,7 +20,7 @@ analyze(username, message, suspicion?) → { score, reasons, similarityPct,
 | Cosine-похожесть на недавние | +30 |
 | Промо-намерение (channel/subscribe и т.п.) | +25 |
 | Burst (слишком много сообщений в окне) | +20 |
-| Ссылка (http/www) | +15 |
+| Ссылка (http/www) | +20 (см. allowlist ниже) |
 | Повтор структуры предложения | +15 |
 
 Плюс правила: эмоут/эмодзи-флуд, ротация `A→B→A`, anti-evasion (leet-спик,
@@ -45,6 +45,18 @@ latin→cyrillic). `triggerAfterN` (per-channel) не даёт реагиров�
   решение принимает человек. Перекрывает whitelist, `triggerAfterN` и
   игнор-роли. **Владелец канала (broadcaster) под фильтр не попадает.**
 - Метрика: исход `blocklist` в `afsyg_spam_decisions_total{decision}`.
+
+## Allowlist доменов для ссылок
+
+Штраф за ссылку (правило #9, +20) можно снять для доверенных доменов —
+**per-channel** список (`channel_link_allowlist`, вкладка «Ссылки» в Settings):
+
+- Штраф НЕ начисляется, только если **все** распознанные хосты сообщения —
+  доверенные (иначе `twitch.tv + scam.xyz` проскочил бы). Fail-safe: если хост
+  не распарсился — штраф остаётся.
+- Домен покрывает поддомены: `twitch.tv` → `clips.twitch.tv`
+  (`host === d || host.endsWith('.'+d)`).
+- Ввод нормализуется при сохранении: `https://www.Twitch.TV/x` → `twitch.tv`.
 
 ## Пороги
 

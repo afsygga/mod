@@ -19,6 +19,7 @@ import { db } from './database/db';
 import { channelRouter } from './channels/channelRouter';
 import { whitelistRouter } from './channels/whitelistRouter';
 import { blocklistRouter } from './channels/blocklistRouter';
+import { linkAllowlistRouter } from './channels/linkAllowlistRouter';
 import { moderationRouter } from './moderation/moderationRouter';
 import { settingsRouter } from './channels/settingsRouter';
 import { logsRouter } from './moderation/logsRouter';
@@ -105,6 +106,7 @@ app.use('/api/admin', adminRouter);
 app.use('/api/channels', authenticate, channelRouter);
 app.use('/api/whitelist', authenticate, whitelistRouter);
 app.use('/api/blocklist', authenticate, blocklistRouter);
+app.use('/api/link-allowlist', authenticate, linkAllowlistRouter);
 app.use('/api/moderation', authenticate, moderationRouter);
 app.use('/api/settings', authenticate, settingsRouter);
 app.use('/api/logs', authenticate, logsRouter);
@@ -174,6 +176,21 @@ async function runMigrations() {
       )
     `);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_blocklist_channel ON channel_blocklist(channel_name)`);
+    // Per-channel trusted link domains — a link whose hosts are all in this list
+    // does not get the link-detection penalty (§ spam, rule #9).
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS channel_link_allowlist (
+        id SERIAL PRIMARY KEY,
+        channel_name VARCHAR(64) NOT NULL,
+        domain VARCHAR(190) NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(channel_name, domain)
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_link_allowlist_channel ON channel_link_allowlist(channel_name)`);
+    // Session management UI: capture the browser/user-agent at login so a user
+    // can recognise their active sessions and revoke the ones they don't know.
+    await db.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent TEXT`);
     await db.query(`
       CREATE TABLE IF NOT EXISTS twitch_user_meta (
         username VARCHAR(64) PRIMARY KEY,

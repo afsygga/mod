@@ -63,6 +63,12 @@ export interface SpamEngineSettings {
    * (leet→latin→cyrillic) применяется так же, как к остальному тексту.
    */
   blocklistPhrases: string[];
+  /**
+   * Доверенные домены: если ВСЕ ссылки в сообщении ведут на эти домены (или их
+   * поддомены), штраф за ссылку (правило #9) не начисляется. Пусто = штрафовать
+   * любую ссылку, как раньше. Домен вида `twitch.tv` покрывает `clips.twitch.tv`.
+   */
+  linkAllowlistDomains: string[];
   /** Включить агрессивную нормализацию для anti-evasion */
   antiEvasion: boolean;
 }
@@ -77,6 +83,7 @@ export const defaultSettings: SpamEngineSettings = {
   triggerAfterN: 1,
   whitelistPhrases: [],
   blocklistPhrases: [],
+  linkAllowlistDomains: [],
   antiEvasion: true,
 };
 
@@ -129,6 +136,25 @@ function normalizeAggressive(text: string): string {
 
 function tokenize(text: string): string[] {
   return normalize(text).split(' ').filter(Boolean);
+}
+
+/**
+ * Извлекает хосты ссылок из сообщения (без протокола/www/пути), в нижнем
+ * регистре. Используется для link-allowlist: сопоставление хоста с доверенным
+ * доменом по правилу host === d || host.endsWith('.'+d). Извлечение нарочно
+ * «щедрое» — если распарсили мусор, allowlist просто не сработает и ссылка будет
+ * оштрафована (fail-safe в сторону флага).
+ */
+function extractLinkHosts(text: string): string[] {
+  const hosts: string[] = [];
+  const re = /(?:https?:\/\/)?(?:www\.)?([a-zа-я0-9-]+(?:\.[a-zа-я0-9-]+)+)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) hosts.push(m[1].toLowerCase());
+  return hosts;
+}
+
+function hostAllowed(host: string, domains: string[]): boolean {
+  return domains.some(d => host === d || host.endsWith('.' + d));
 }
 
 /**
@@ -600,8 +626,18 @@ export class SpamEngine {
     if (this.settings.linkDetection) {
       const linkRegex = /(https?:\/\/|www\.|[\wа-я-]+\.(com|ru|net|org|tv|io|gg|co|app|me|dev|xyz|info|biz|live|link|ly|to|de|ua|by|kz|fr|uk|it|jp|cn|in|onl|club|store|shop|art|news|site|tech))/i;
       if (linkRegex.test(message)) {
-        score += 20;
-        reasons.push('link detected');
+        // Link-allowlist: не штрафуем, только если ВСЕ распознанные хосты —
+        // доверенные (иначе "clips.twitch.tv и scam.xyz" проскочил бы).
+        const allow = this.settings.linkAllowlistDomains;
+        let penalize = true;
+        if (allow && allow.length > 0) {
+          const hosts = extractLinkHosts(message);
+          if (hosts.length > 0 && hosts.every(h => hostAllowed(h, allow))) penalize = false;
+        }
+        if (penalize) {
+          score += 20;
+          reasons.push('link detected');
+        }
       }
     }
 
