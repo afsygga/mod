@@ -174,7 +174,9 @@ export class TwitchManager {
               }
               logger.info(`Auto-rejoined ${row.name} for ${email}`);
             } catch (err: any) {
-              logger.error(`Auto-rejoin ${row.name} failed: ${err?.message}`);
+              // tmi.js rejects join() with a bare string, not an Error, so
+              // err?.message is undefined — fall back to the raw value.
+              logger.error(`Auto-rejoin ${row.name} failed: ${err?.message || err}`);
             }
           }
         } catch (err) {

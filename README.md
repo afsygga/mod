@@ -26,6 +26,11 @@ docker compose up -d
 
 The bot account must be a moderator in the channels you want to moderate.
 
+## Documentation
+
+- [`docs/`](docs/) — architecture + diagram, full REST/WebSocket API reference, operations guide, spam-detection model.
+- [`AGENTS.md`](AGENTS.md) — canonical deep guide: invariants, token lifecycle, runbooks (read before changing code).
+
 ## Architecture
 
 ```

@@ -32,7 +32,7 @@ import { authenticate } from './auth/authMiddleware';
 import { TwitchManager } from './twitch/TwitchManager';
 import { EventSubManager } from './twitch/EventSubManager';
 import { startTokenValidator } from './twitch/tokenValidator';
-import { register as metricsRegister, setPitProvider, setBuildInfo, setOauthSessions, Pit } from './utils/metrics';
+import { register as metricsRegister, setPitProvider, setBuildInfo, setOauthSessions, jobStart, jobEnd, Pit } from './utils/metrics';
 import { TelegramBot } from './telegram/TelegramBot';
 import { wsHandler } from './websocket/wsHandler';
 import { loadSuspicion, loadPoints } from './utils/suspicion';
@@ -317,6 +317,62 @@ async function bootstrapAdmin() {
   }
 }
 
+// ── Message retention ────────────────────────────────────────────────────────
+// `messages` grows unbounded — every chat line is stored forever, and the
+// analytics aggregates over it were already logging Slow query >1.5s. This job
+// prunes rows older than the retention window, but KEEPS anything that hit the
+// detect threshold (spam_score >= keep) so flagged history stays available for
+// investigations. Tunable via env; RETENTION_DAYS<=0 disables it entirely.
+const RETENTION_DAYS       = parseInt(process.env.MESSAGE_RETENTION_DAYS || '30', 10);
+const RETENTION_KEEP_SCORE = parseInt(process.env.MESSAGE_RETENTION_KEEP_SCORE || '70', 10);
+const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6h
+
+async function purgeOldMessages(): Promise<'success'> {
+  // Delete in bounded batches: a single unbounded DELETE on a large table takes
+  // a long lock and bloats WAL. ctid-keyed LIMIT keeps each statement cheap.
+  const batchSize = 5000;
+  let total = 0;
+  for (;;) {
+    const { rowCount } = await db.query(
+      `DELETE FROM messages WHERE ctid IN (
+         SELECT ctid FROM messages
+         WHERE created_at < NOW() - ($1 * INTERVAL '1 day')
+           AND spam_score < $2
+         LIMIT $3
+       )`,
+      [RETENTION_DAYS, RETENTION_KEEP_SCORE, batchSize]
+    );
+    total += rowCount || 0;
+    if (!rowCount || rowCount < batchSize) break;
+  }
+  if (total > 0) {
+    logger.info(`[retention] purged ${total} messages older than ${RETENTION_DAYS}d (kept spam_score>=${RETENTION_KEEP_SCORE})`);
+  }
+  return 'success';
+}
+
+function startMessageRetention(): void {
+  if (!Number.isFinite(RETENTION_DAYS) || RETENTION_DAYS <= 0) {
+    logger.info('[retention] disabled (MESSAGE_RETENTION_DAYS<=0)');
+    return;
+  }
+  const tick = async () => {
+    const startedAt = jobStart('message_retention');
+    let result: 'success' | 'error' = 'error';
+    try {
+      result = await purgeOldMessages();
+    } catch (err: any) {
+      logger.error(`[retention] purge failed: ${err?.message || err}`);
+    } finally {
+      jobEnd('message_retention', result, startedAt);
+    }
+  };
+  // Delay the first run so it doesn't compete with startup (IRC joins, EventSub).
+  setTimeout(tick, 2 * 60_000);
+  setInterval(tick, RETENTION_INTERVAL_MS);
+  logger.info(`[retention] enabled: keep ${RETENTION_DAYS}d, protect spam_score>=${RETENTION_KEEP_SCORE}, every ${RETENTION_INTERVAL_MS / 3_600_000}h`);
+}
+
 async function start() {
   try {
     await db.connect();
@@ -363,6 +419,10 @@ async function start() {
     // Сам решает, включён ли он (глобальная настройка + STEAM_API_KEY), поэтому
     // стартует безусловно.
     steamSync.start();
+
+    // Ретенция таблицы messages — не даёт ей расти бесконечно и тормозить
+    // аналитику; хранит записи со score выше порога детекта для расследований.
+    startMessageRetention();
 
     // Hourly validation of every stored OAuth session (Twitch requirement) —
     // stamps last_validated, reactively refreshes confirmed-expired tokens,

@@ -26,6 +26,15 @@ export class TelegramBot {
   // Per-chat throttling: each chat has its own pending queue
   private pendingByChatId: Map<string, QueueNotification[]> = new Map();
   private flushTimers: Map<string, NodeJS.Timeout> = new Map();
+  // Per-user notification cooldown: during a flood a single spammer produces one
+  // over-threshold message after another, and without this every one of them
+  // fired a fresh Telegram ping (the queue row on the dashboard already dedups
+  // by user, so the storm is only felt in Telegram). Key = `channel|username`,
+  // value = last time we notified about that user. Repeats inside the window are
+  // dropped. The dashboard queue_add broadcast is intentionally NOT gated here —
+  // it stays live so an escalating score keeps updating the open panel.
+  private lastNotifiedByUser: Map<string, number> = new Map();
+  private static readonly NOTIFY_COOLDOWN_MS = 60_000;
   // Chat IDs we've already told "not registered" — silent after that
   private warnedUnauth: Set<string> = new Set();
   private static instance: TelegramBot | null = null;
@@ -124,6 +133,18 @@ export class TelegramBot {
 
   /** Schedule queue notification — routed to ALL channel subscribers */
   notifyQueueAdd(n: QueueNotification): void {
+    // Per-user cooldown — collapse a flood of the same spammer into one ping.
+    const userKey = `${n.channel}|${n.username}`;
+    const now = Date.now();
+    const last = this.lastNotifiedByUser.get(userKey);
+    if (last !== undefined && now - last < TelegramBot.NOTIFY_COOLDOWN_MS) return;
+    this.lastNotifiedByUser.set(userKey, now);
+    // Opportunistic sweep so the map can't grow without bound on busy channels.
+    if (this.lastNotifiedByUser.size > 500) {
+      for (const [k, t] of this.lastNotifiedByUser) {
+        if (now - t >= TelegramBot.NOTIFY_COOLDOWN_MS) this.lastNotifiedByUser.delete(k);
+      }
+    }
     (async () => {
       const chats = await this.getChannelSubscriberChats(n.channel);
       if (chats.length === 0) {
