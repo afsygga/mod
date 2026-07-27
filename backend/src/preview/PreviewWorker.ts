@@ -310,9 +310,22 @@ export class PreviewWorker {
       catch (err: any) { recordPreviewError('spawn'); logger.error(`[preview] backfill spawn: ${err?.message}`); return resolve(); }
       this.backfillProc = proc;
       logger.info(`[preview] backfill start: session ${item.sessionId} vod ${item.vodId}`);
+      // Прогресс во время обработки — иначе sheet_count=0 до самого конца VOD, и
+      // API отдаёт «недоступно», хотя кадры уже копятся. Обновляем раз в 15с,
+      // чтобы готовая часть становилась видимой сразу.
+      const bump = async () => {
+        let sheets = 0;
+        try { sheets = fs.readdirSync(dir).filter(f => f.endsWith('.jpg')).length; } catch {}
+        if (sheets > 0) await db.query(
+          `UPDATE stream_previews SET sheet_count=$2, seconds_covered=$3, updated_at=NOW() WHERE session_id=$1`,
+          [item.sessionId, sheets, sheets * SECONDS_PER_SHEET]
+        ).catch(() => {});
+      };
+      const progress = setInterval(() => { bump().catch(() => {}); }, 15_000);
       proc.stderr?.on('data', (d: Buffer) => { const l = d.toString().trim(); if (l) logger.warn(`[preview] bf ffmpeg: ${l.slice(0, 200)}`); });
       proc.on('error', () => { recordPreviewError('ffmpeg'); });
       proc.on('exit', async (code) => {
+        clearInterval(progress);
         this.backfillProc = null;
         let sheets = 0;
         try { sheets = fs.readdirSync(dir).filter(f => f.endsWith('.jpg')).length; } catch {}
