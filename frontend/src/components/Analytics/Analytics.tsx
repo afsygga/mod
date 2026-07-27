@@ -683,6 +683,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   const panStartRef = useRef<{ clientX: number; viewStart: number; viewEnd: number } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const panningRef = useRef(false); // синхронный флаг pan — без риска устаревшего замыкания
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const W = 800;
@@ -740,6 +741,10 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   const zoomRef = useRef({ viewStart: 0, viewEnd: 0, dataLen: 0 });
   zoomRef.current = { viewStart, viewEnd, dataLen: data.length };
 
+  // Пока грузится — рендерится плейсхолдер, а не карточка с containerRef, поэтому
+  // wheel-эффект надо перезапустить, когда график реально смонтирован.
+  const chartReady = !loading && data.length > 0;
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -768,7 +773,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [CHART_W]);
+  }, [CHART_W, chartReady]);
 
   const viewData = data.slice(viewStart, viewEnd + 1);
   const maxY = Math.max(...viewData.map(d => d.msgs), 1);
@@ -802,11 +807,12 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   // Pan handlers
   const onPanStart = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
+    panningRef.current = true;
     setPanning(true);
     panStartRef.current = { clientX: e.clientX, viewStart, viewEnd };
   };
   const onPanMove = (e: React.MouseEvent) => {
-    if (!panning || !panStartRef.current || !svgRef.current) return;
+    if (!panningRef.current || !panStartRef.current || !svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
     // Screen px per data index: chart width (viewBox units) scaled to screen px
     const pxPerIdx = (CHART_W * (rect.width / W)) / Math.max(1, viewEnd - viewStart);
@@ -820,7 +826,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
     setViewStart(newVs);
     setViewEnd(newVe);
   };
-  const onPanEnd = () => setPanning(false);
+  const onPanEnd = () => { panningRef.current = false; setPanning(false); };
 
   // Minute drill-down
   const openMinute = useCallback((minute: string) => {
@@ -834,6 +840,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
 
   const onChartMouseUp = (e: React.MouseEvent) => {
     const start = panStartRef.current;
+    panningRef.current = false;
     setPanning(false);
     // Treat as click (not drag) when the mouse barely moved
     if (start && Math.abs(e.clientX - start.clientX) < 5 && tooltip) {
