@@ -598,8 +598,10 @@ Twitch — те раз в 5–10с). Спека — [docs/superpowers/specs/2026
   (дефолт 14) — `scanBackfill()` матчит архивы Helix к сессиям по времени старта,
   очередь с 1 воркером, потолок `PREVIEW_MAX_GB` (дефолт 5), VOD-ветка usher
   (`/vod/<id>.m3u8`). Twitch хранит VOD 7–60 дней — старше обработать нельзя.
-- **Сделано: B1 (live-ингест) + B1.5 (VOD-backfill), за флагом.** Осталось: **B2**
-  (API `GET /api/streams/:id/previews` + UI-тумблер), **B3** (скраб на графике + клик в VOD `?t=`).
+- **Сделано полностью (за флагом):** B1 (live-ингест), B1.5 (VOD-backfill),
+  **B2** (`GET /api/streams/:id/previews` — мета спрайтов), **B3** (`StreamAreaChart`:
+  наведение → кадр-поповер посекундно; Shift+клик → VOD `?t=`). Флаг env-based
+  (`PREVIEW_PIPELINE_ENABLED`), UI-тумблера нет — включается на хосте.
 - Метрики: `afsyg_preview_workers_active`, `afsyg_preview_sheets_total{result}`,
   `afsyg_preview_ingest_errors_total{stage}`.
 
