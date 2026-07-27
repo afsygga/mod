@@ -173,6 +173,7 @@ npm run build             # tsc && vite build
 | `VITE_API_URL` (`https://afsyg.gay/backend`), `VITE_WS_URL` (`wss://afsyg.gay/ws`) | Build-time для фронта |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Уведомления (опционально) |
 | `STEAM_API_KEY` | Steam → категория (§22). Без него синхронизация просто спит, остальное работает |
+| `PREVIEW_PIPELINE_ENABLED` / `PREVIEW_STORAGE_DIR` | Scrub-preview стрима (§24). Дефолт выкл; том `preview_data` под кадры |
 
 ---
 
@@ -575,6 +576,28 @@ fuzzy-поиск Twitch промахивается, и кнопка разово
 «Steam не отдаёт профиль». Метрики: `afsyg_steam_api_requests_total{result}`,
 `afsyg_steam_category_changes_total{result}`, `afsyg_steam_links{state}`,
 плюс джоба `steam_sync`.
+
+## 24. Scrub-preview стрима (feature B, `backend/src/preview/`)
+
+Посекундная раскадровка живого стрима для превью на графике (лучше storyboards
+Twitch — те раз в 5–10с). Спека — [docs/superpowers/specs/2026-07-27-stream-scrub-preview-design.md](docs/superpowers/specs/2026-07-27-stream-scrub-preview-design.md).
+
+- **Флаг `PREVIEW_PIPELINE_ENABLED` (env, дефолт `false`).** Без него sync ничего
+  не делает — фича полностью выключена, изолирует ToS-риск и ресурсы.
+- **`twitchGql.ts` — «серая зона»:** приватный GQL `gql.twitch.tv` (публичный
+  web-client-id) → `PlaybackAccessToken` → usher m3u8 → самый низкий видео-вариант.
+  Не Helix, недокументировано; если сломается — чинить только здесь.
+- **`PreviewWorker.ts`:** на каждый live-канал (лимит 2) спавнит `ffmpeg`
+  (`fps=3,scale=640:-2,tile=6x5`), пакует кадры в спрайт-листы (30 ячеек = 10с) в
+  `PREVIEW_STORAGE_DIR` (том `preview_data`), прогресс → таблица `stream_previews`.
+  Ретенция — 6ч-джоба, чистит старше 30д. **ffmpeg добавлен в backend-образ.**
+- Раздача спрайтов — публичный статик `/previews` (кадры не секретны).
+- **Локально не проверяется** (нужны ffmpeg + живой стрим + том) — только прод.
+  Live-край отстаёт ~10с. VOD-id (для клика в VOD, B3) тянется best-effort через Helix.
+- **Сделано: B1 (ингест за флагом).** Осталось: **B2** (API `GET /api/streams/:id/previews`
+  + UI-тумблер флага), **B3** (скраб-превью на графике + клик в VOD `?t=`).
+- Метрики: `afsyg_preview_workers_active`, `afsyg_preview_sheets_total{result}`,
+  `afsyg_preview_ingest_errors_total{stage}`.
 
 ## 23. Известные хвосты (сделано НЕ всё)
 

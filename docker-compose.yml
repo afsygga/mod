@@ -42,10 +42,13 @@ services:
       STEAM_API_KEY: ${STEAM_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-change_me_in_production}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      PREVIEW_PIPELINE_ENABLED: ${PREVIEW_PIPELINE_ENABLED:-false}
+      PREVIEW_STORAGE_DIR: /app/previews
     ports:
       - "4000:4000"
     volumes:
       - ./backend/logs:/app/logs
+      - preview_data:/app/previews
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4000/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -64,3 +67,4 @@ services:
 
 volumes:
   postgres_data:
+  preview_data:

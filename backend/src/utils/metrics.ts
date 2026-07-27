@@ -41,6 +41,9 @@ const steamApi        = C('afsyg_steam_api_requests_total', 'Steam GetPlayerSumm
 const steamChanges    = C('afsyg_steam_category_changes_total', 'Twitch category changes driven by Steam presence', ['result']);
 const suspicionEvents = C('afsyg_suspicious_user_events_total', 'Twitch suspicious-user EventSub notifications', ['source']);
 const suspicionBonus  = C('afsyg_suspicion_score_bonus_applied_total', 'Messages whose spam score was raised by the Twitch suspicion signal');
+const previewSheets   = C('afsyg_preview_sheets_total', 'Scrub-preview sprite sheets written', ['result']);
+const previewErrors   = C('afsyg_preview_ingest_errors_total', 'Scrub-preview ingest errors', ['stage']);
+const previewWorkers  = G('afsyg_preview_workers_active', 'Active scrub-preview ffmpeg ingest workers');
 
 // ── event-driven gauges ──────────────────────────────────────────────────────
 const chatLastMessage = G('afsyg_chat_last_message_timestamp_seconds', 'Last message past routing/dedup');
@@ -135,6 +138,9 @@ export const recordChatAccepted = () => { chatAccepted.inc(); chatLastMessage.se
 export const recordChatDropped = (reason: string) => chatDropped.labels(reason).inc();
 export const recordChatError = () => chatErrors.labels('spam_engine').inc();
 export const recordSpamDecision = (d: string) => spamDecisions.labels(d).inc();
+export const recordPreviewSheet = (result: 'ok' | 'error') => previewSheets.labels(result).inc();
+export const recordPreviewError = (stage: string) => previewErrors.labels(stage).inc();
+export const setPreviewWorkers = (n: number) => previewWorkers.set(n);
 export const recordModeration = (action: string, result: string) => moderationCmds.labels(action, result).inc();
 export const recordAutomod = (action: string, result: string) => automodActions.labels(action, result).inc();
 export const recordTokenRefresh = (kind: string, result: string) => tokenRefresh.labels(kind, result).inc();

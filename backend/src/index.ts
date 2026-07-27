@@ -39,6 +39,7 @@ import { TelegramBot } from './telegram/TelegramBot';
 import { wsHandler } from './websocket/wsHandler';
 import { loadSuspicion, loadPoints } from './utils/suspicion';
 import { SteamSync } from './steam/SteamSync';
+import { PreviewWorker } from './preview/PreviewWorker';
 import { logger } from './utils/logger';
 
 const app = express();
@@ -94,6 +95,12 @@ app.get('/metrics', async (_req, res) => {
     res.status(500).end(String(err));
   }
 });
+// Scrub-preview sprite sheets (feature B) — non-sensitive stream thumbnails,
+// served statically so <img> can load them without auth headers. Immutable.
+app.use('/previews', express.static(process.env.PREVIEW_STORAGE_DIR || '/app/previews', {
+  maxAge: '7d', immutable: true, fallthrough: true,
+}));
+
 app.use('/api/auth', rateLimit(10), authRouter);
 app.use('/api/twitch-creds', twitchCredsRouter);
 app.use('/api/twitch-oauth', twitchOAuthRouter);
@@ -191,6 +198,25 @@ async function runMigrations() {
     // Session management UI: capture the browser/user-agent at login so a user
     // can recognise their active sessions and revoke the ones they don't know.
     await db.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent TEXT`);
+    // Scrub-preview (feature B): per-session sprite-sheet metadata. Frames live
+    // on the preview_data volume; this row tells the frontend how to map a second
+    // to a sheet+cell. Populated only when PREVIEW_PIPELINE_ENABLED=true.
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS stream_previews (
+        session_id INTEGER PRIMARY KEY,
+        channel_name VARCHAR(64) NOT NULL,
+        vod_id VARCHAR(32),
+        fps INTEGER NOT NULL,
+        cell_w INTEGER NOT NULL,
+        cell_h INTEGER NOT NULL,
+        cols INTEGER NOT NULL,
+        rows INTEGER NOT NULL,
+        sheet_count INTEGER NOT NULL DEFAULT 0,
+        seconds_covered INTEGER NOT NULL DEFAULT 0,
+        started_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
     await db.query(`
       CREATE TABLE IF NOT EXISTS twitch_user_meta (
         username VARCHAR(64) PRIMARY KEY,
@@ -455,6 +481,26 @@ async function start() {
     // аналитику; хранит записи со score выше порога детекта для расследований.
     startMessageRetention();
 
+    // Scrub-preview (feature B) — раскадровка живых стримов. Крутится только при
+    // PREVIEW_PIPELINE_ENABLED=true; иначе sync() ничего не делает. Синхронизируем
+    // воркеры с live-сессиями раз в 30с, ретенция спрайтов — раз в 6ч.
+    const previewWorker = PreviewWorker.get();
+    const syncPreviews = async () => {
+      if (!PreviewWorker.enabled()) return;
+      try {
+        const { rows } = await db.query(
+          "SELECT id, channel_name, started_at FROM stream_sessions WHERE ended_at IS NULL"
+        );
+        await previewWorker.sync(rows as any);
+      } catch (err) { logger.warn('[preview] sync failed', err as any); }
+    };
+    if (PreviewWorker.enabled()) {
+      logger.info('[preview] pipeline ENABLED');
+      syncPreviews();
+      setInterval(syncPreviews, 30_000);
+      setInterval(() => previewWorker.cleanup(), 6 * 60 * 60 * 1000);
+    }
+
     // Hourly validation of every stored OAuth session (Twitch requirement) —
     // stamps last_validated, reactively refreshes confirmed-expired tokens,
     // marks dead grants reauthorization_required.
@@ -518,6 +564,7 @@ async function shutdown(signal: string) {
   logger.info(`Received ${signal}, shutting down gracefully`);
   const force = setTimeout(() => process.exit(0), 5000);
   try {
+    try { PreviewWorker.get().stopAll(); } catch {}
     await db.query("UPDATE stream_sessions SET ended_at = NOW() WHERE ended_at IS NULL");
     logger.info('Closed open stream sessions');
   } catch (err) {

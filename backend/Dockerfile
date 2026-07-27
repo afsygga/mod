@@ -7,10 +7,14 @@ RUN npm run build
 
 FROM node:20-alpine
 WORKDIR /app
+# ffmpeg — для посекундной раскадровки стрима (scrub-preview, feature B).
+# Пайплайн не запускается без PREVIEW_PIPELINE_ENABLED=true, но бинарь нужен в образе.
+RUN apk add --no-cache ffmpeg
 COPY package*.json ./
 RUN npm install --omit=dev
 COPY --from=builder /app/dist ./dist
-RUN mkdir -p logs
+RUN mkdir -p logs previews
+ENV PREVIEW_STORAGE_DIR=/app/previews
 # Immutable build revision → afsyg_build_info metric (passed from CI as the git sha)
 ARG GIT_REVISION=unknown
 ENV GIT_REVISION=$GIT_REVISION
