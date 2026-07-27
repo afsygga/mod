@@ -241,7 +241,13 @@ export class PreviewWorker {
           if (this.workers.has(s.id)) continue;                         // сейчас идёт live-ингест
           if (this.backfillQueue.some(q => q.sessionId === s.id)) continue;
           const { rows: prev } = await db.query('SELECT sheet_count FROM stream_previews WHERE session_id=$1', [s.id]);
-          if (prev[0]?.sheet_count > 0) continue;                       // уже раскадрован
+          if (prev[0]?.sheet_count > 0) {
+            // В БД «готово» — но проверяем, что кадры реально на диске: эфемерный
+            // том мог стереть их при рестарте. Если файлов нет — перегенерируем.
+            let hasFiles = false;
+            try { hasFiles = fs.readdirSync(path.join(storageRoot(), String(s.id))).some(f => f.endsWith('.jpg')); } catch {}
+            if (hasFiles) continue;
+          }
           this.backfillQueue.push({ sessionId: s.id, channel, vodId: vod.id, startedAt: s.started_at });
         }
       }

@@ -1,7 +1,16 @@
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { db } from '../database/db';
 
 export const streamsRouter = Router();
+
+function previewDirHasFrames(id: number): boolean {
+  try {
+    const dir = path.join(process.env.PREVIEW_STORAGE_DIR || '/app/previews', String(id));
+    return fs.readdirSync(dir).some(f => f.endsWith('.jpg'));
+  } catch { return false; }
+}
 
 // Stream sessions list
 streamsRouter.get('/', async (req: Request, res: Response) => {
@@ -308,7 +317,9 @@ streamsRouter.get('/:id/previews', async (req: Request, res: Response) => {
        FROM stream_previews WHERE session_id=$1`,
       [id]
     );
-    if (rows.length === 0 || (rows[0].sheet_count ?? 0) === 0) {
+    if (rows.length === 0 || (rows[0].sheet_count ?? 0) === 0 || !previewDirHasFrames(id)) {
+      // Нет строки / не раскадрован / файлы пропали (эфемерный том после рестарта)
+      // → не отдаём available, чтобы график не показывал чёрные битые кадры.
       return res.json({ available: false });
     }
     const p = rows[0];
