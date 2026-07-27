@@ -17,7 +17,7 @@ const PAT_HASH = '0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b07
 
 interface PlaybackToken { value: string; signature: string; }
 
-async function getLivePlaybackToken(login: string): Promise<PlaybackToken | null> {
+async function getPlaybackToken(vars: Record<string, any>, field: string, label: string): Promise<PlaybackToken | null> {
   try {
     const r = await fetch(GQL, {
       method: 'POST',
@@ -25,19 +25,24 @@ async function getLivePlaybackToken(login: string): Promise<PlaybackToken | null
       body: JSON.stringify({
         operationName: 'PlaybackAccessToken',
         extensions: { persistedQuery: { version: 1, sha256Hash: PAT_HASH } },
-        variables: { isLive: true, login, isVod: false, vodID: '', playerType: 'embed' },
+        variables: { playerType: 'embed', ...vars },
       }),
     });
-    if (!r.ok) { logger.warn(`[preview] gql token ${r.status} for ${login}`); return null; }
+    if (!r.ok) { logger.warn(`[preview] gql token ${r.status} for ${label}`); return null; }
     const j: any = await r.json();
-    const t = j?.data?.streamPlaybackAccessToken;
+    const t = j?.data?.[field];
     if (!t?.value || !t?.signature) return null;
     return { value: t.value, signature: t.signature };
   } catch (err: any) {
-    logger.warn(`[preview] gql token failed for ${login}: ${err?.message || err}`);
+    logger.warn(`[preview] gql token failed for ${label}: ${err?.message || err}`);
     return null;
   }
 }
+
+const getLivePlaybackToken = (login: string) =>
+  getPlaybackToken({ isLive: true, login, isVod: false, vodID: '' }, 'streamPlaybackAccessToken', login);
+const getVodPlaybackToken = (vodID: string) =>
+  getPlaybackToken({ isLive: false, login: '', isVod: true, vodID }, 'videoPlaybackAccessToken', `vod:${vodID}`);
 
 /** Парсит master m3u8, возвращает URL варианта с НАИМЕНЬШИМ разрешением (не audio_only). */
 function pickLowestVideoVariant(master: string): string | null {
@@ -84,6 +89,35 @@ export async function getLiveLowResM3u8(login: string): Promise<string | null> {
     return variant;
   } catch (err: any) {
     logger.warn(`[preview] usher failed for ${login}: ${err?.message || err}`);
+    return null;
+  }
+}
+
+/**
+ * URL HLS-варианта самого низкого качества для ГОТОВОГО VOD (для бэкфилла).
+ * usher-эндпоинт для VOD другой (`/vod/<id>.m3u8`), токен — vod-поток GQL.
+ */
+export async function getVodLowResM3u8(vodId: string): Promise<string | null> {
+  const tok = await getVodPlaybackToken(vodId);
+  if (!tok) return null;
+  const params = new URLSearchParams({
+    client_id: WEB_CLIENT_ID,
+    token: tok.value,
+    sig: tok.signature,
+    allow_source: 'true',
+    allow_audio_only: 'true',
+    reassignments_supported: 'true',
+  });
+  const usher = `https://usher.ttvnw.net/vod/${encodeURIComponent(vodId)}.m3u8?${params}`;
+  try {
+    const r = await fetch(usher);
+    if (!r.ok) { logger.warn(`[preview] usher vod ${r.status} for ${vodId}`); return null; }
+    const master = await r.text();
+    const variant = pickLowestVideoVariant(master);
+    if (!variant) logger.warn(`[preview] no vod variant for ${vodId}`);
+    return variant;
+  } catch (err: any) {
+    logger.warn(`[preview] usher vod failed for ${vodId}: ${err?.message || err}`);
     return null;
   }
 }

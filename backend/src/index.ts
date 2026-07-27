@@ -499,6 +499,10 @@ async function start() {
       syncPreviews();
       setInterval(syncPreviews, 30_000);
       setInterval(() => previewWorker.cleanup(), 6 * 60 * 60 * 1000);
+      // VOD-backfill прошлых записей за последние N дней: скан через 2 мин после
+      // старта (не мешать джойнам) и раз в 6ч. Очередь с 1 воркером + потолок диска.
+      setTimeout(() => previewWorker.scanBackfill(), 2 * 60_000);
+      setInterval(() => previewWorker.scanBackfill(), 6 * 60 * 60 * 1000);
     }
 
     // Hourly validation of every stored OAuth session (Twitch requirement) —

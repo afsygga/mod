@@ -4,7 +4,7 @@ import path from 'path';
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
 import { getAppToken } from '../twitch/twitchToken';
-import { getLiveLowResM3u8 } from './twitchGql';
+import { getLiveLowResM3u8, getVodLowResM3u8 } from './twitchGql';
 import { recordPreviewSheet, recordPreviewError, setPreviewWorkers } from '../utils/metrics';
 
 /*
@@ -28,6 +28,9 @@ const SECONDS_PER_SHEET = CELLS / FPS; // 10с
 const CELL_W = 640;
 const CELL_H = 360;                    // предполагаем 16:9; scale=640:-2 даст ~360
 const MAX_WORKERS = 2;
+// Бэкфилл прошлых VOD: сколько дней назад брать и потолок диска под все спрайты.
+const BACKFILL_DAYS = parseInt(process.env.PREVIEW_BACKFILL_DAYS || '14', 10);
+const MAX_GB = parseFloat(process.env.PREVIEW_MAX_GB || '5');
 
 interface Worker {
   sessionId: number;
@@ -45,6 +48,9 @@ function storageRoot(): string {
 
 export class PreviewWorker {
   private workers = new Map<number, Worker>(); // by session id
+  private backfillQueue: { sessionId: number; channel: string; vodId: string; startedAt: string }[] = [];
+  private backfillRunning = false;
+  private backfillProc: ChildProcess | null = null;
   private static _i: PreviewWorker | null = null;
   static get(): PreviewWorker { return (this._i ??= new PreviewWorker()); }
 
@@ -185,6 +191,144 @@ export class PreviewWorker {
 
   stopAll(): void {
     for (const id of [...this.workers.keys()]) this.stop(id);
+    this.backfillQueue = [];
+    try { this.backfillProc?.kill('SIGKILL'); } catch {}
+    this.backfillProc = null;
+  }
+
+  // ── VOD-backfill: раскадровка прошлых записей за последние N дней ──────────
+  private helixHeaders(): Promise<Record<string, string> | null> {
+    const clientId = process.env.TWITCH_CLIENT_ID;
+    return getAppToken().then(token =>
+      clientId && token ? { 'Client-ID': clientId, Authorization: `Bearer ${token}` } : null);
+  }
+
+  /** Архивные VOD канала за последние BACKFILL_DAYS: [{id, created_at}]. */
+  private async listArchives(channel: string): Promise<{ id: string; created_at: string }[]> {
+    const h = await this.helixHeaders();
+    if (!h) return [];
+    const u = await fetch(`https://api.twitch.tv/helix/users?login=${encodeURIComponent(channel)}`, { headers: h });
+    if (!u.ok) return [];
+    const userId = (await u.json() as any)?.data?.[0]?.id;
+    if (!userId) return [];
+    const v = await fetch(`https://api.twitch.tv/helix/videos?user_id=${userId}&type=archive&first=100`, { headers: h });
+    if (!v.ok) return [];
+    const cutoff = Date.now() - BACKFILL_DAYS * 86400_000;
+    return ((await v.json() as any)?.data || [])
+      .filter((x: any) => new Date(x.created_at).getTime() >= cutoff)
+      .map((x: any) => ({ id: x.id, created_at: x.created_at }));
+  }
+
+  /** Ищем прошлые VOD (за N дней), матчим к сессиям по времени, ставим в очередь. */
+  async scanBackfill(): Promise<void> {
+    if (!PreviewWorker.enabled()) return;
+    try {
+      const { rows: chans } = await db.query('SELECT name FROM channels');
+      for (const c of chans) {
+        const channel = String(c.name).toLowerCase();
+        const vods = await this.listArchives(channel);
+        for (const vod of vods) {
+          // Матч VOD → сессия по близости старта (VOD created_at = начало эфира).
+          const { rows: sess } = await db.query(
+            `SELECT id, started_at FROM stream_sessions
+             WHERE channel_name=$1
+               AND ABS(EXTRACT(EPOCH FROM (started_at - $2::timestamptz))) < 900
+             ORDER BY ABS(EXTRACT(EPOCH FROM (started_at - $2::timestamptz))) ASC LIMIT 1`,
+            [channel, vod.created_at]
+          );
+          const s = sess[0];
+          if (!s) continue;
+          if (this.workers.has(s.id)) continue;                         // сейчас идёт live-ингест
+          if (this.backfillQueue.some(q => q.sessionId === s.id)) continue;
+          const { rows: prev } = await db.query('SELECT sheet_count FROM stream_previews WHERE session_id=$1', [s.id]);
+          if (prev[0]?.sheet_count > 0) continue;                       // уже раскадрован
+          this.backfillQueue.push({ sessionId: s.id, channel, vodId: vod.id, startedAt: s.started_at });
+        }
+      }
+      if (this.backfillQueue.length > 0) {
+        logger.info(`[preview] backfill queued: ${this.backfillQueue.length}`);
+        this.processBackfillQueue();
+      }
+    } catch (err: any) {
+      logger.warn(`[preview] scanBackfill failed: ${err?.message || err}`);
+    }
+  }
+
+  private dirSizeBytes(dir: string): number {
+    let total = 0;
+    let entries: string[] = [];
+    try { entries = fs.readdirSync(dir); } catch { return 0; }
+    for (const e of entries) {
+      const p = path.join(dir, e);
+      try {
+        const st = fs.statSync(p);
+        total += st.isDirectory() ? this.dirSizeBytes(p) : st.size;
+      } catch {}
+    }
+    return total;
+  }
+
+  private async processBackfillQueue(): Promise<void> {
+    if (this.backfillRunning) return;
+    this.backfillRunning = true;
+    try {
+      while (this.backfillQueue.length > 0 && PreviewWorker.enabled()) {
+        // Потолок диска — иначе бэкфилл может забить хост спрайтами.
+        if (this.dirSizeBytes(storageRoot()) > MAX_GB * 1e9) {
+          logger.warn(`[preview] backfill stopped: disk cap ${MAX_GB}GB reached`);
+          this.backfillQueue = [];
+          break;
+        }
+        const item = this.backfillQueue.shift()!;
+        await this.runBackfill(item);
+      }
+    } finally {
+      this.backfillRunning = false;
+    }
+  }
+
+  private runBackfill(item: { sessionId: number; channel: string; vodId: string; startedAt: string }): Promise<void> {
+    return new Promise(async (resolve) => {
+      const dir = path.join(storageRoot(), String(item.sessionId));
+      const m3u8 = await getVodLowResM3u8(item.vodId);
+      if (!m3u8) { recordPreviewError('vod_m3u8'); return resolve(); }
+      try { fs.mkdirSync(dir, { recursive: true }); } catch { recordPreviewError('mkdir'); return resolve(); }
+      await this.upsertMetaVod(item.sessionId, item.channel, item.vodId, item.startedAt);
+      const args = [
+        '-hide_banner', '-loglevel', 'warning', '-i', m3u8,
+        '-vf', `fps=${FPS},scale=${CELL_W}:-2,tile=${COLS}x${ROWS}`,
+        '-q:v', '5', '-start_number', '0', path.join(dir, 'sheet_%05d.jpg'),
+      ];
+      let proc: ChildProcess;
+      try { proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] }); }
+      catch (err: any) { recordPreviewError('spawn'); logger.error(`[preview] backfill spawn: ${err?.message}`); return resolve(); }
+      this.backfillProc = proc;
+      logger.info(`[preview] backfill start: session ${item.sessionId} vod ${item.vodId}`);
+      proc.stderr?.on('data', (d: Buffer) => { const l = d.toString().trim(); if (l) logger.warn(`[preview] bf ffmpeg: ${l.slice(0, 200)}`); });
+      proc.on('error', () => { recordPreviewError('ffmpeg'); });
+      proc.on('exit', async (code) => {
+        this.backfillProc = null;
+        let sheets = 0;
+        try { sheets = fs.readdirSync(dir).filter(f => f.endsWith('.jpg')).length; } catch {}
+        for (let i = 0; i < sheets; i++) recordPreviewSheet('ok');
+        await db.query(
+          `UPDATE stream_previews SET sheet_count=$2, seconds_covered=$3, updated_at=NOW() WHERE session_id=$1`,
+          [item.sessionId, sheets, sheets * SECONDS_PER_SHEET]
+        ).catch(() => {});
+        logger.info(`[preview] backfill done: session ${item.sessionId} sheets=${sheets} code=${code}`);
+        resolve();
+      });
+    });
+  }
+
+  private async upsertMetaVod(sessionId: number, channel: string, vodId: string, startedAt: string): Promise<void> {
+    await db.query(
+      `INSERT INTO stream_previews
+         (session_id, channel_name, vod_id, fps, cell_w, cell_h, cols, rows, sheet_count, seconds_covered, started_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,0,$9)
+       ON CONFLICT (session_id) DO UPDATE SET vod_id=EXCLUDED.vod_id, updated_at=NOW()`,
+      [sessionId, channel, vodId, FPS, CELL_W, CELL_H, COLS, ROWS, startedAt]
+    ).catch(() => {});
   }
 
   /** Ретенция: удаляем спрайты и мету старше maxDays (прокси «пока жив VOD»). */

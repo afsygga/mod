@@ -44,6 +44,8 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       PREVIEW_PIPELINE_ENABLED: ${PREVIEW_PIPELINE_ENABLED:-false}
       PREVIEW_STORAGE_DIR: /app/previews
+      PREVIEW_BACKFILL_DAYS: ${PREVIEW_BACKFILL_DAYS:-14}
+      PREVIEW_MAX_GB: ${PREVIEW_MAX_GB:-5}
     ports:
       - "4000:4000"
     volumes:

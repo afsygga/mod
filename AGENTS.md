@@ -594,8 +594,12 @@ Twitch — те раз в 5–10с). Спека — [docs/superpowers/specs/2026
 - Раздача спрайтов — публичный статик `/previews` (кадры не секретны).
 - **Локально не проверяется** (нужны ffmpeg + живой стрим + том) — только прод.
   Live-край отстаёт ~10с. VOD-id (для клика в VOD, B3) тянется best-effort через Helix.
-- **Сделано: B1 (ингест за флагом).** Осталось: **B2** (API `GET /api/streams/:id/previews`
-  + UI-тумблер флага), **B3** (скраб-превью на графике + клик в VOD `?t=`).
+- **VOD-backfill (B1.5):** раскадровка прошлых записей за `PREVIEW_BACKFILL_DAYS`
+  (дефолт 14) — `scanBackfill()` матчит архивы Helix к сессиям по времени старта,
+  очередь с 1 воркером, потолок `PREVIEW_MAX_GB` (дефолт 5), VOD-ветка usher
+  (`/vod/<id>.m3u8`). Twitch хранит VOD 7–60 дней — старше обработать нельзя.
+- **Сделано: B1 (live-ингест) + B1.5 (VOD-backfill), за флагом.** Осталось: **B2**
+  (API `GET /api/streams/:id/previews` + UI-тумблер), **B3** (скраб на графике + клик в VOD `?t=`).
 - Метрики: `afsyg_preview_workers_active`, `afsyg_preview_sheets_total{result}`,
   `afsyg_preview_ingest_errors_total{stage}`.
 
