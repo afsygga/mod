@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import { Radio, Calendar, Clock, Zap, ChevronDown, ChevronLeft, ChevronRight, VolumeX, Ban, RotateCcw, Shield, Users, TrendingUp, X, MessageSquare, AlertTriangle } from 'lucide-react';
 import { api } from '../../hooks/useApi';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 interface TwitchMod {
@@ -2193,6 +2194,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const [compareMode, setCompareMode] = useState(false);
   const [compareSel, setCompareSel] = useState<number[]>([]);
   const [comparePair, setComparePair] = useState<[StreamSession, StreamSession] | null>(null);
+  const isMobile = useIsMobile();
   const heatmapTooltipCache = useRef<Record<string, any>>({});
   // Какую ячейку сейчас реально держит курсор. Асинхронный фетч детали стрима
   // применяется, только если указатель всё ещё на той же ячейке — иначе тултип
@@ -2325,7 +2327,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const streamsListView = section === 'streams' && !selectedStream && !comparePair;
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '14px 12px' : '24px 28px' }}>
       <div style={{ maxWidth: streamsListView ? '1320px' : '900px', margin: '0 auto' }}>
 
         {/* ── MODS ── */}

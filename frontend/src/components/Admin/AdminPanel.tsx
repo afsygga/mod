@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../hooks/useApi';
 import { ChatterName } from '../common/ChatterName';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 type Tab = 'overview' | 'health' | 'users' | 'whitelist' | 'channels' | 'steam' | 'logs' | 'moderators' | 'bans' | 'audit';
 
@@ -23,19 +24,26 @@ interface ChannelItem { id: number; name: string; owner_email: string | null; ow
 
 export function AdminPanel() {
   const [tab, setTab] = useState<Tab>('overview');
+  const isMobile = useIsMobile();
 
   return (
-    <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-      <div style={{
-        width: '210px', flexShrink: 0, padding: '20px 12px',
-        borderRight: '1px solid rgba(255,255,255,0.04)',
-        background: 'rgba(8,8,12,0.3)', overflowY: 'auto',
+    <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: 'hidden' }}>
+      <div className={isMobile ? 'mobile-tabstrip' : undefined} style={{
+        width: isMobile ? '100%' : '210px', flexShrink: 0,
+        padding: isMobile ? '8px 10px' : '20px 12px',
+        borderRight: isMobile ? 'none' : '1px solid rgba(255,255,255,0.04)',
+        borderBottom: isMobile ? '1px solid rgba(255,255,255,0.06)' : 'none',
+        background: 'rgba(8,8,12,0.3)',
+        overflowY: isMobile ? 'visible' : 'auto',
+        overflowX: isMobile ? 'auto' : 'visible',
+        display: 'flex', flexDirection: isMobile ? 'row' : 'column',
+        gap: isMobile ? '4px' : undefined, alignItems: isMobile ? 'center' : undefined,
       }}>
-        <div style={{
+        {!isMobile && <div style={{
           fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
           letterSpacing: '0.16em', marginBottom: '14px', paddingLeft: '10px',
           color: 'rgba(255,255,255,0.3)',
-        }}>Admin</div>
+        }}>Admin</div>}
         {([
           ['overview', BarChart3, 'Обзор'],
           ['health', HeartPulse, 'Здоровье'],
@@ -51,8 +59,12 @@ export function AdminPanel() {
           const active = tab === id;
           return (
             <button key={id} onClick={() => setTab(id as Tab)} style={{
-              display: 'flex', alignItems: 'center', gap: '10px',
-              width: '100%', padding: '10px 12px', marginBottom: '3px',
+              display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '10px',
+              width: isMobile ? 'auto' : '100%',
+              flexShrink: 0, whiteSpace: 'nowrap',
+              padding: isMobile ? '9px 12px' : '10px 12px',
+              marginBottom: isMobile ? 0 : '3px',
+              minHeight: isMobile ? '38px' : undefined,
               borderRadius: '10px', cursor: 'pointer',
               background: active ? 'rgba(255,200,0,0.08)' : 'transparent',
               color: active ? '#ffc800' : 'rgba(255,255,255,0.5)',
@@ -68,7 +80,7 @@ export function AdminPanel() {
         })}
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '16px 14px' : '24px 32px' }}>
         <AnimatePresence mode="wait">
           <motion.div key={tab}
             initial={{ opacity: 0, y: 12 }}

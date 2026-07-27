@@ -7,6 +7,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { T, Lang } from '../../utils/i18n';
 import { Footer } from '../Footer/Footer';
 import { ChatterName } from '../common/ChatterName';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface ContextMsg { message: string; spam_score: number; reasons: string[] | null; created_at: string; }
 interface LogStats { total: number; muted: number; banned: number; flagged: number; auto: number; today: number; }
@@ -219,6 +220,11 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
 
   // Shared grid template so header + rows align
   const GRID = '70px 95px 100px 130px 120px 50px minmax(120px,1fr) auto 50px 28px 28px';
+  const isMobile = useIsMobile();
+  // На телефоне 11-колоночная таблица не влезает — даём ей горизонтальный скролл
+  // внутри своего контейнера (тело страницы вбок не едет), сохраняя выравнивание
+  // шапки и строк одинаковым min-width.
+  const ROW_MIN = isMobile ? '820px' : undefined;
 
   const handleDelete = async () => {
     if (!confirmDelete) return;
@@ -262,7 +268,8 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Stats bar */}
       <div style={{
-        display: 'flex', gap: '8px', padding: '14px 18px',
+        display: 'flex', flexWrap: isMobile ? 'wrap' : 'nowrap', gap: '8px',
+        padding: isMobile ? '12px' : '14px 18px',
         borderBottom: '1px solid rgba(255,255,255,0.03)',
       }}>
         {[
@@ -274,7 +281,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
           { num: stats.today, label: lang === 'ru' ? 'За сегодня' : 'Today', color: '#00e5cc' },
         ].map(({ num, label, color }) => (
           <div key={label} style={{
-            flex: 1, padding: '9px 14px', borderRadius: '11px',
+            flex: isMobile ? '1 1 28%' : 1, padding: '9px 14px', borderRadius: '11px',
             background: 'rgba(255,255,255,0.02)',
           }}>
             <div style={{ fontSize: '18px', fontWeight: 700, color, lineHeight: 1 }}>{num}</div>
@@ -285,7 +292,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
 
       {/* Filters */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 18px',
+        display: 'flex', alignItems: 'center', flexWrap: isMobile ? 'wrap' : 'nowrap', gap: '8px', padding: isMobile ? '10px 12px' : '12px 18px',
         borderBottom: '1px solid rgba(255,255,255,0.03)',
       }}>
         <div style={{
@@ -420,13 +427,13 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
       </div>
 
       {/* Logs list */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: isMobile ? 'auto' : undefined, padding: '0' }}>
         {/* Sticky header */}
         {!loading && filtered.length > 0 && (
           <div style={{
             position: 'sticky', top: 0, zIndex: 5,
             display: 'grid', gridTemplateColumns: GRID, alignItems: 'center', gap: '12px',
-            padding: '9px 18px',
+            padding: '9px 18px', minWidth: ROW_MIN,
             background: 'rgba(10,10,16,0.95)',
             borderBottom: '1px solid rgba(255,255,255,0.06)',
             fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
@@ -469,7 +476,7 @@ export function Logs({ lang, liveTick }: { lang: Lang; liveTick?: number }) {
             <React.Fragment key={log.id}>
             <div style={{
               display: 'grid', gridTemplateColumns: GRID, alignItems: 'center', gap: '12px',
-              padding: '8px 18px',
+              padding: '8px 18px', minWidth: ROW_MIN,
               borderBottom: isOpen ? 'none' : '1px solid rgba(255,255,255,0.025)',
               background: isOpen ? 'rgba(255,255,255,0.02)' : 'transparent',
               transition: 'background 0.12s', cursor: 'pointer',
