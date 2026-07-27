@@ -604,7 +604,7 @@ adminRouter.get('/steam', async (_req: Request, res: Response) => {
                 LEFT JOIN (SELECT DISTINCT channel_name FROM stream_sessions WHERE ended_at IS NULL) s
                   ON LOWER(s.channel_name) = LOWER(l.channel_name)
                 ORDER BY l.channel_name`),
-      db.query("SELECT key, value FROM settings WHERE key IN ('steam_sync_enabled','steam_exit_category')"),
+      db.query("SELECT key, value FROM settings WHERE key IN ('steam_sync_enabled','steam_exit_category','steam_offline_enabled')"),
       db.query('SELECT steam_game, twitch_category FROM steam_category_map ORDER BY steam_game'),
     ]);
     const cfg: Record<string, string> = {};
@@ -612,6 +612,7 @@ adminRouter.get('/steam', async (_req: Request, res: Response) => {
     const sync: any = (global as any).steamSync;
     res.json({
       enabled: cfg.steam_sync_enabled === 'true',
+      offline_enabled: cfg.steam_offline_enabled === 'true',
       exit_category: cfg.steam_exit_category || '',
       api_key_set: !!process.env.STEAM_API_KEY,
       links,
@@ -624,16 +625,17 @@ adminRouter.get('/steam', async (_req: Request, res: Response) => {
 });
 
 adminRouter.put('/steam/settings', async (req: Request, res: Response) => {
-  const { enabled, exit_category } = req.body;
+  const { enabled, offline_enabled, exit_category } = req.body;
   try {
     const put = (key: string, value: string) => db.query(
       `INSERT INTO settings (key, value) VALUES ($1,$2)
        ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=NOW()`, [key, value]
     );
     if (enabled !== undefined) await put('steam_sync_enabled', enabled ? 'true' : 'false');
+    if (offline_enabled !== undefined) await put('steam_offline_enabled', offline_enabled ? 'true' : 'false');
     if (exit_category !== undefined) await put('steam_exit_category', String(exit_category).trim());
     recordAudit(req.user?.email || 'unknown', 'steam_settings',
-      JSON.stringify({ enabled, exit_category }));
+      JSON.stringify({ enabled, offline_enabled, exit_category }));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'steam settings failed' });

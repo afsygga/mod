@@ -1106,7 +1106,7 @@ interface SteamSeen {
   appId: string | null; visible: boolean;
 }
 interface SteamState {
-  enabled: boolean; exit_category: string; api_key_set: boolean;
+  enabled: boolean; offline_enabled: boolean; exit_category: string; api_key_set: boolean;
   links: SteamLinkRow[]; seen: Record<string, SteamSeen>;
   mappings: { steam_game: string; twitch_category: string }[];
 }
@@ -1201,7 +1201,7 @@ function SteamTab() {
     return () => clearInterval(i);
   }, []);
 
-  const saveSettings = async (patch: { enabled?: boolean; exit_category?: string }) => {
+  const saveSettings = async (patch: { enabled?: boolean; offline_enabled?: boolean; exit_category?: string }) => {
     await api.put('/api/admin/steam/settings', patch);
     load();
   };
@@ -1326,6 +1326,34 @@ function SteamTab() {
           }}>
             <span style={{
               position: 'absolute', top: '3px', left: st.enabled ? '23px' : '3px',
+              width: '18px', height: '18px', borderRadius: '50%', background: '#fff',
+              transition: 'left 0.15s',
+            }} />
+          </button>
+        </div>
+
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '14px',
+          marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.05)',
+          opacity: st.enabled ? 1 : 0.5,
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>
+              Менять категорию и в оффлайне
+            </div>
+            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '3px', lineHeight: 1.5 }}>
+              По умолчанию категория меняется только когда канал в эфире. Включи, чтобы запуск
+              игры в Steam переключал категорию, даже если стрим ещё не начат.
+            </div>
+          </div>
+          <button onClick={() => saveSettings({ offline_enabled: !st.offline_enabled })} disabled={!st.enabled} style={{
+            width: '44px', height: '24px', borderRadius: '12px', cursor: st.enabled ? 'pointer' : 'default',
+            border: 'none', padding: 0, position: 'relative', flexShrink: 0,
+            background: st.offline_enabled ? '#00c878' : 'rgba(255,255,255,0.12)',
+            transition: 'background 0.15s',
+          }}>
+            <span style={{
+              position: 'absolute', top: '3px', left: st.offline_enabled ? '23px' : '3px',
               width: '18px', height: '18px', borderRadius: '50%', background: '#fff',
               transition: 'left 0.15s',
             }} />

@@ -112,6 +112,16 @@ export class SteamSync {
     return (rows[0]?.value || '').trim();
   }
 
+  /**
+   * Менять ли категорию, когда канал НЕ в эфире. По умолчанию выкл — тогда
+   * оффлайн-смена игры лишь запоминается (чтобы выход в эфир не ставил категорию
+   * на игру, запущенную давно, §22). При вкл — категория меняется сразу.
+   */
+  private async isOfflineEnabled(): Promise<boolean> {
+    const { rows } = await db.query("SELECT value FROM settings WHERE key='steam_offline_enabled'");
+    return rows[0]?.value === 'true';
+  }
+
   private async syncOnce(): Promise<'success' | 'partial' | 'error'> {
     const apiKey = process.env.STEAM_API_KEY || '';
     if (!apiKey) {
@@ -162,6 +172,7 @@ export class SteamSync {
     const liveNow = new Set<string>(liveRows.map((r: any) => String(r.channel_name).toLowerCase()));
 
     const exitCat = await this.exitCategory();
+    const offlineEnabled = await this.isOfflineEnabled();
     const tm: any = (global as any).twitchManager;
     let hadFailure = false;
 
@@ -182,9 +193,14 @@ export class SteamSync {
       const justWentLive = isLive && !this.liveBefore.has(channel);
       const gameChanged = game !== (link.last_game || null);
 
-      // Оффлайн — запоминаем молча. Иначе выход в эфир сопровождался бы сменой
-      // категории на игру, запущенную задолго до стрима.
-      if (!isLive) {
+      // Когда реально меняем категорию:
+      //  • в эфире — при смене игры ИЛИ в момент выхода в эфир (сценарий
+      //    «запустил игру → пошёл стримить» ставит категорию сразу);
+      //  • оффлайн — только если включён тумблер steam_offline_enabled и игра
+      //    сменилась. Иначе оффлайн-смена лишь запоминается молча (§22).
+      const shouldApply = isLive ? (gameChanged || justWentLive) : (offlineEnabled && gameChanged);
+
+      if (!shouldApply) {
         if (gameChanged) {
           await db.query(
             'UPDATE steam_links SET last_game=$2, last_appid=$3, last_synced_at=NOW() WHERE channel_name=$1',
@@ -194,14 +210,6 @@ export class SteamSync {
           await db.query('UPDATE steam_links SET last_synced_at=NOW() WHERE channel_name=$1',
             [link.channel_name]).catch(() => {});
         }
-        continue;
-      }
-
-      // В эфире и ничего не поменялось — выход в эфир считаем сменой, чтобы
-      // сценарий «запустил игру → пошёл стримить» отработал сразу.
-      if (!gameChanged && !justWentLive) {
-        await db.query('UPDATE steam_links SET last_synced_at=NOW() WHERE channel_name=$1',
-          [link.channel_name]).catch(() => {});
         continue;
       }
 
