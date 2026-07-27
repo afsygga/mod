@@ -163,7 +163,8 @@ streamsRouter.get('/:id/stats', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const { rows: [session] } = await db.query(
-      'SELECT * FROM stream_sessions WHERE id=$1', [id]
+      `SELECT *, EXTRACT(EPOCH FROM (COALESCE(ended_at, NOW()) - started_at))::int AS duration_seconds
+       FROM stream_sessions WHERE id=$1`, [id]
     );
     if (!session) return res.status(404).json({ error: 'not found' });
 

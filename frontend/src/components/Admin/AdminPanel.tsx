@@ -747,7 +747,7 @@ function Overview() {
               <span style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.2)', minWidth: '16px' }}>#{i + 1}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.85)', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><ChatterName channel={u.channel_name} name={u.username}>{u.username}</ChatterName></div>
-                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginTop: '1px' }}>📺 {u.channel_name} · {u.flagged_count} флагов</div>
+                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginTop: '1px' }}>{u.channel_name} · {u.flagged_count} флагов</div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
                 <div style={{ fontSize: '11px', fontWeight: 700, color: '#ff7070' }}>{u.mute_count}× мут</div>
@@ -773,7 +773,7 @@ function Overview() {
               <div key={c.channel_name} style={{ padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                   <span style={{ fontSize: '10px', fontWeight: 700, color: 'rgba(255,255,255,0.2)', minWidth: '16px' }}>#{i + 1}</span>
-                  <span style={{ fontWeight: 600, color: '#5b9eff', fontSize: '12px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📺 {c.channel_name}</span>
+                  <span style={{ fontWeight: 600, color: '#5b9eff', fontSize: '12px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.channel_name}</span>
                   <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>{c.total_msgs.toLocaleString()}</span>
                 </div>
                 <div style={{ paddingLeft: '24px' }}>
@@ -2049,7 +2049,7 @@ function BansTab() {
             </div>
 
             {/* Channel */}
-            <span style={{ fontSize: '11px', color: '#ffc800', fontWeight: 600 }}>📺 {b.channel_name}</span>
+            <span style={{ fontSize: '11px', color: '#ffc800', fontWeight: 600 }}>{b.channel_name}</span>
 
             {/* Performer */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>

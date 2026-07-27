@@ -161,7 +161,7 @@ export function UserCard({ username, channel, color, messages, detectThreshold, 
               {username}
             </h2>
             <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'rgba(255,255,255,0.4)', flexWrap: 'wrap' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>📺 {channel}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>{channel}</span>
               {stats?.created_at && (
                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar size={10} /> Joined {new Date(stats.created_at).toLocaleDateString()}

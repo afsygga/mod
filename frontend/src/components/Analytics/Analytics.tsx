@@ -1438,28 +1438,7 @@ function StreamDetail({ streamId, onBack }: { streamId: number; onBack: () => vo
         endedAt={session.ended_at}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-        {/* Timeline */}
-        {timeline.length > 0 && (
-          <div style={{ padding: '18px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '14px' }}>Активность по часам</div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '80px' }}>
-              {timeline.map((t, i) => {
-                const h = Math.max(2, (t.total / maxBar) * 80);
-                const sh = t.total > 0 ? (t.spam / t.total) * h : 0;
-                return (
-                  <div key={i} title={`${mskTime(t.hour)} — ${t.total} сообщ., ${t.spam} спам`}
-                    style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '80px' }}>
-                    <div style={{ width: '100%', height: `${h}px`, borderRadius: '2px 2px 0 0', background: 'rgba(255,255,255,0.1)', position: 'relative', overflow: 'hidden' }}>
-                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${sh}px`, background: 'rgba(255,68,68,0.7)' }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
         {/* Top spammers */}
         {top_spammers.length > 0 && (
           <div style={{ padding: '18px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -2203,6 +2182,8 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
   const [modsError, setModsError] = useState<string | null>(null);
   const [init, setInit] = useState(false);
   const [heatmap, setHeatmap] = useState<{ day: string; count: number }[]>([]);
+  const [hourlyHeatmap, setHourlyHeatmap] = useState<{ dow: number; hour: number; c: number }[]>([]);
+  const [hourCell, setHourCell] = useState<{ x: number; y: number; label: string } | null>(null);
   const [selectedMod, setSelectedMod] = useState<{ mod: TwitchMod; rank: number } | null>(null);
   // Day filter — '' = all time, otherwise 'YYYY-MM-DD' (Moscow calendar day)
   const [statDate, setStatDate] = useState('');
@@ -2220,6 +2201,7 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
 
   useEffect(() => {
     api.get<{ day: string; count: number }[]>('/api/streams/heatmap').then(setHeatmap).catch(() => {});
+    api.get<{ dow: number; hour: number; c: number }[]>('/api/streams/hourly-heatmap').then(setHourlyHeatmap).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -2535,9 +2517,10 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
 
             {/* ── ЛЕВЫЙ РЕЙЛ: активность (стопкой) ── */}
             <div style={{ flex: '0 0 300px', minWidth: '260px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Activity Heatmap */}
+            {/* Activity Heatmap — 16 недель */}
+            {heatmap.length > 0 && (
             <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}>
-            {heatmap.length > 0 && (() => {
+            {(() => {
               const today = new Date();
               today.setHours(0, 0, 0, 0);
               const dayOfWeek = today.getDay();
@@ -2685,6 +2668,80 @@ export function Analytics({ initialSection, streamEventTick }: { initialSection?
               );
             })()}
             </motion.div>
+            )}
+
+            {/* Hour × Day-of-week heatmap — Час × день */}
+            {hourlyHeatmap.length > 0 && (
+            <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1], delay: 0.06 }}>
+            {(() => {
+              // Postgres dow: 0=Sun..6=Sat. Display rows Mon..Sun.
+              const dowOrder = [1, 2, 3, 4, 5, 6, 0];
+              const rowLabels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+              const grid: number[][] = dowOrder.map(() => new Array(24).fill(0));
+              let maxC = 1;
+              hourlyHeatmap.forEach(({ dow, hour, c }) => {
+                const rowIdx = dowOrder.indexOf(dow);
+                if (rowIdx >= 0 && hour >= 0 && hour < 24) {
+                  grid[rowIdx][hour] = c;
+                  if (c > maxC) maxC = c;
+                }
+              });
+              let peakRow = 0, peakHour = 0;
+              grid.forEach((r, ri) => r.forEach((c, hi) => { if (c === maxC) { peakRow = ri; peakHour = hi; } }));
+              const CELL = 15, GAP = 3, LEFT = 26, TOP = 16;
+              const w = LEFT + 24 * (CELL + GAP);
+              const h = TOP + 7 * (CELL + GAP) + 12;
+              return (
+                <div style={{ padding: '14px 16px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', position: 'relative' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '12px' }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '2px', background: '#00c878', opacity: 0.8 }} />
+                    <span style={{ fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.45)', letterSpacing: '0.06em' }}>Час × день</span>
+                  </div>
+                  <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', maxWidth: `${w}px`, height: 'auto', display: 'block', overflow: 'visible' }}
+                    onMouseLeave={() => setHourCell(null)}>
+                    {[0, 6, 12, 18, 23].map(hr => (
+                      <text key={hr} x={LEFT + hr * (CELL + GAP) + CELL / 2} y={10} textAnchor="middle"
+                        style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.3)', fontFamily: 'Inter,sans-serif' }}>{hr}</text>
+                    ))}
+                    {rowLabels.map((label, row) => (
+                      <text key={label} x={0} y={TOP + row * (CELL + GAP) + CELL - 3}
+                        style={{ fontSize: '8px', fill: 'rgba(255,255,255,0.25)', fontFamily: 'Inter,sans-serif' }}>{label}</text>
+                    ))}
+                    {grid.map((rowArr, row) =>
+                      rowArr.map((count, hour) => {
+                        const opacity = count === 0 ? 0.06 : 0.08 + (count / maxC) * 0.82;
+                        return (
+                          <rect key={`${row}-${hour}`}
+                            x={LEFT + hour * (CELL + GAP)} y={TOP + row * (CELL + GAP)}
+                            width={CELL} height={CELL} rx={2} ry={2}
+                            fill={`rgba(0,200,120,${opacity.toFixed(2)})`}
+                            style={{ cursor: 'default' }}
+                            onMouseEnter={e => {
+                              const rect = (e.currentTarget as SVGRectElement).getBoundingClientRect();
+                              setHourCell({ x: rect.left + rect.width / 2, y: rect.top, label: `${rowLabels[row]} ${String(hour).padStart(2, '0')}:00 — ${count.toLocaleString()} сообщений` });
+                            }}
+                          />
+                        );
+                      })
+                    )}
+                  </svg>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>
+                    <span>Пик: {rowLabels[peakRow]} {String(peakHour).padStart(2, '0')}:00</span>
+                    <span>{maxC.toLocaleString()} сообщ.</span>
+                  </div>
+                  {hourCell && (
+                    <div style={{
+                      position: 'fixed', left: hourCell.x + 8, top: hourCell.y - 10, zIndex: 9998,
+                      background: 'rgba(12,12,18,0.98)', border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '10px', padding: '8px 12px', pointerEvents: 'none',
+                      fontSize: '11px', color: '#00c878', fontWeight: 600, whiteSpace: 'nowrap',
+                    }}>{hourCell.label}</div>
+                  )}
+                </div>
+              );
+            })()}
+            </motion.div>
+            )}
 
             </div>
 

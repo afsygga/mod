@@ -560,7 +560,7 @@ export function Settings({ settings, channels, onSave, lang }: Props) {
               <Section icon={Tv2} color="#a070ff" title={lang === 'ru' ? 'Настройки каналов' : 'Channel Settings'}
                 subtitle={lang === 'ru' ? 'Авто-модерация для каждого канала' : 'Auto-moderation for each channel'}>
                 {channels.map(ch => (
-                  <ToggleRow key={ch.name} label={`📺 ${ch.name}`} desc={`${t.status}: ${ch.status}`}
+                  <ToggleRow key={ch.name} label={ch.name} desc={`${t.status}: ${ch.status}`}
                     checked={ch.auto_mod} onChange={async (v: boolean) => {
                       await api.patch(`/api/channels/${ch.name}/automod`, { enabled: v }).catch(console.error);
                     }} />
