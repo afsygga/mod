@@ -347,9 +347,9 @@ export default function App() {
         height: '56px', display: 'flex', alignItems: 'center',
         padding: isMobile ? '0 12px' : '0 22px',
         gap: isMobile ? '8px' : '14px', flexShrink: 0,
-        background: 'rgba(8,8,12,0.55)',
-        backdropFilter: 'blur(32px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(32px) saturate(180%)',
+        background: isMobile ? 'rgba(6,6,10,0.97)' : 'rgba(8,8,12,0.55)',
+        backdropFilter: isMobile ? 'none' : 'blur(32px) saturate(180%)',
+        WebkitBackdropFilter: isMobile ? 'none' : 'blur(32px) saturate(180%)',
         borderBottom: '1px solid rgba(255,255,255,0.025)',
         position: 'relative', zIndex: 10,
       }}>
@@ -378,7 +378,8 @@ export default function App() {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: '4px', flex: 1, marginLeft: isMobile ? '0' : '12px' }}>
+        <div className={isMobile ? 'mobile-tabstrip' : undefined}
+          style={{ display: 'flex', gap: '4px', flex: 1, marginLeft: isMobile ? '0' : '12px', flexWrap: 'nowrap', overflowX: isMobile ? 'auto' : 'visible' }}>
           {([
             ['dashboard', t.dashboard, LayoutDashboard],
             ['logs', t.logs, ScrollText],
@@ -390,11 +391,11 @@ export default function App() {
             ] : []),
           ] as const).map(([id, label, Icon]) => (
             <button key={id} onClick={() => setTab(id as Tab)}
-              style={{ ...tabStyle(id), padding: isMobile ? '8px 10px' : '7px 14px', gap: isMobile ? '0' : '7px' }}
+              style={{ ...tabStyle(id), padding: isMobile ? '10px 14px' : '7px 14px', gap: isMobile ? '6px' : '7px', minHeight: isMobile ? '40px' : undefined, whiteSpace: 'nowrap' }}
               onMouseEnter={e => { if (tab !== id) e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; }}
               onMouseLeave={e => { if (tab !== id) e.currentTarget.style.background = 'transparent'; }}>
               <Icon size={14} />
-              {!isMobile && label}
+              {(!isMobile || tab === id) && label}
               {id === 'dashboard' && totalActive > 0 && (
                 <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '999px', background: 'rgba(240,71,71,0.18)', color: '#ff7070', fontWeight: 700 }}>{totalActive}</span>
               )}
@@ -549,16 +550,14 @@ export default function App() {
               {sidebarOpen && (
                 <div onClick={() => setSidebarOpen(false)} style={{
                   position: 'fixed', inset: 0, zIndex: 40,
-                  background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+                  background: 'rgba(0,0,0,0.6)',
                 }} />
               )}
               {/* Drawer */}
               <div style={{
                 position: 'fixed', top: 0, left: 0, bottom: 0,
-                width: '280px', zIndex: 50, overflowY: 'auto',
-                background: 'rgba(8,8,12,0.96)',
-                backdropFilter: 'blur(32px)',
-                WebkitBackdropFilter: 'blur(32px)',
+                width: 'min(280px, 82vw)', zIndex: 50, overflowY: 'auto',
+                background: 'rgba(10,10,16,0.99)',
                 borderRight: '1px solid rgba(255,255,255,0.06)',
                 transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
                 transition: 'transform 0.25s cubic-bezier(0.4,0,0.2,1)',
@@ -617,7 +616,7 @@ export default function App() {
                   padding: isMobile ? '9px 12px' : '11px 16px', borderRadius: '12px',
                   background: 'rgba(255,255,255,0.025)',
                   border: '1px solid rgba(255,255,255,0.05)',
-                  backdropFilter: 'blur(20px)',
+                  backdropFilter: isMobile ? undefined : 'blur(20px)',
                 }}>
                   <div style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: 700, color, lineHeight: 1 }}>{num}</div>
                   <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>{label}</div>

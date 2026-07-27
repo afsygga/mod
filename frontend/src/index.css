@@ -167,6 +167,23 @@ input, textarea, select, button { -webkit-tap-highlight-color: transparent; }
     overflow-x: hidden;
   }
 
+  /* backdrop-filter артефачит на мобильном Chrome/Windows (§10) — на телефоне
+     гасим blur везде и делаем поверхности сплошными для читаемости. */
+  .glass, .glass-strong {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: rgba(18,18,24,0.96) !important;
+  }
+
+  /* Горизонтальная лента вкладок навбара — без переноса, скрытый скроллбар. */
+  .mobile-tabstrip {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .mobile-tabstrip::-webkit-scrollbar { display: none; }
+  .mobile-tabstrip > * { flex-shrink: 0; }
+
   /* Logs table: hide verbose columns */
   .log-col-reasons,
   .log-col-channel {

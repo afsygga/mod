@@ -97,8 +97,7 @@ export function CommandConsole({ channel, lang }: Props) {
         style={{
           position: 'fixed', bottom: '40px', right: '20px',
           width: '44px', height: '44px', borderRadius: '12px',
-          background: 'rgba(8,8,12,0.85)',
-          backdropFilter: 'blur(20px)',
+          background: 'rgba(10,10,16,0.97)',
           border: '1px solid rgba(255,200,0,0.2)',
           cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -121,8 +120,7 @@ export function CommandConsole({ channel, lang }: Props) {
         style={{
           position: 'fixed', bottom: '40px', right: '20px',
           width: '200px', height: '36px',
-          background: 'rgba(8,8,12,0.85)',
-          backdropFilter: 'blur(20px)',
+          background: 'rgba(10,10,16,0.97)',
           border: '1px solid rgba(255,255,255,0.06)',
           borderRadius: '10px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -150,10 +148,8 @@ export function CommandConsole({ channel, lang }: Props) {
       transition={{ type: 'spring', stiffness: 320, damping: 28 }}
       style={{
         position: 'fixed', bottom: '40px', right: '20px',
-        width: '380px', height: '360px',
-        background: 'rgba(8,8,12,0.92)',
-        backdropFilter: 'blur(28px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(28px) saturate(180%)',
+        width: 'min(380px, calc(100vw - 24px))', height: 'min(360px, calc(100vh - 140px))',
+        background: 'rgba(10,10,16,0.98)',
         border: '1px solid rgba(255,255,255,0.08)',
         borderRadius: '14px',
         display: 'flex', flexDirection: 'column',
