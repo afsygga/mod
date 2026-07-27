@@ -1,15 +1,16 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
-import path from 'path';
 import { db } from '../database/db';
+import { framesDir } from '../preview/sheets';
+import {
+  STEP_LADDER, CELL_W, CELL_H, GRID_COLS, GRID_ROWS, SHEET_CELLS,
+  FRAMES_PER_WINDOW_DESKTOP, FRAMES_PER_WINDOW_MOBILE,
+} from '../preview/previewMath';
 
 export const streamsRouter = Router();
 
-function previewDirHasFrames(id: number): boolean {
-  try {
-    const dir = path.join(process.env.PREVIEW_STORAGE_DIR || '/app/previews', String(id));
-    return fs.readdirSync(dir).some(f => f.endsWith('.jpg'));
-  } catch { return false; }
+function framesOnDisk(id: number): number {
+  try { return fs.readdirSync(framesDir(id)).filter(f => f.endsWith('.webp')).length; } catch { return 0; }
 }
 
 // Stream sessions list
@@ -306,35 +307,33 @@ streamsRouter.get('/:id/games', async (req: Request, res: Response) => {
   }
 });
 
-// Scrub-preview мета для сессии (feature B): как маппить секунду в спрайт/ячейку.
-// Фронт по этим полям вычисляет URL листа и позицию кадра при наведении.
-streamsRouter.get('/:id/previews', async (req: Request, res: Response) => {
+// Scrub-preview v2 мета: клиент по ней сам считает шаг/окно/адресацию листа и
+// грузит листы с публичного /preview-sheet. Листы — WebP 5×3 из 1fps-кадров.
+streamsRouter.get('/:id/preview-meta', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
     const { rows } = await db.query(
-      `SELECT vod_id, fps, cell_w, cell_h, cols, rows, sheet_count, seconds_covered
-       FROM stream_previews WHERE session_id=$1`,
+      `SELECT vod_id, frame_count, duration_sec, preview_version FROM stream_previews WHERE session_id=$1`,
       [id]
     );
-    if (rows.length === 0 || (rows[0].sheet_count ?? 0) === 0 || !previewDirHasFrames(id)) {
-      // Нет строки / не раскадрован / файлы пропали (эфемерный том после рестарта)
-      // → не отдаём available, чтобы график не показывал чёрные битые кадры.
-      return res.json({ available: false });
-    }
-    const p = rows[0];
+    const dbFrames = rows[0]?.frame_count ?? 0;
+    const diskFrames = framesOnDisk(id);
+    // Доступно, только если реально есть кадры на диске (эфемерный том мог стереть).
+    if (rows.length === 0 || dbFrames === 0 || diskFrames === 0) return res.json({ available: false });
     res.json({
       available: true,
-      base: `/previews/${id}`,          // <base>/sheet_00000.jpg
-      vod_id: p.vod_id || null,
-      fps: p.fps,
-      cell_w: p.cell_w, cell_h: p.cell_h,
-      cols: p.cols, rows: p.rows,
-      sheet_count: p.sheet_count,
-      seconds_covered: p.seconds_covered,
+      vod_id: rows[0].vod_id || null,
+      frame_count: Math.max(dbFrames, diskFrames),
+      duration_sec: rows[0].duration_sec ?? dbFrames,
+      preview_version: rows[0].preview_version || null,
+      cell_w: CELL_W, cell_h: CELL_H, cols: GRID_COLS, rows: GRID_ROWS, sheet_cells: SHEET_CELLS,
+      step_ladder: STEP_LADDER,
+      fpw_desktop: FRAMES_PER_WINDOW_DESKTOP, fpw_mobile: FRAMES_PER_WINDOW_MOBILE,
+      sheet_url: `/preview-sheet/${id}`, // + ?step=&start=
     });
   } catch (err) {
-    res.status(500).json({ error: 'previews failed' });
+    res.status(500).json({ error: 'preview meta failed' });
   }
 });
 

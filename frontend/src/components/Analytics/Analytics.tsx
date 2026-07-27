@@ -664,10 +664,17 @@ function SparkLine({ data, color, w = 80, h = 28 }: { data: number[]; color: str
 }
 
 interface PreviewMeta {
-  available: boolean;
-  base: string; vod_id: string | null;
-  fps: number; cell_w: number; cell_h: number;
-  cols: number; rows: number; sheet_count: number; seconds_covered: number;
+  available: boolean; vod_id: string | null;
+  frame_count: number; duration_sec: number;
+  cell_w: number; cell_h: number; cols: number; rows: number; sheet_cells: number;
+  step_ladder: number[]; fpw_desktop: number; fpw_mobile: number; sheet_url: string;
+}
+
+// Ближайшее значение лесенки ≥ raw (зеркало backend previewMath.roundStepUp).
+function pvRoundStepUp(ladder: number[], raw: number): number {
+  const r = Math.max(1, Math.ceil(raw));
+  for (const s of ladder) if (s >= r) return s;
+  return ladder[ladder.length - 1];
 }
 
 function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
@@ -682,6 +689,10 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   const [viewEnd, setViewEnd] = useState(0);
   const [tooltip, setTooltip] = useState<{ svgX: number; idx: number; sec: number } | null>(null);
   const [preview, setPreview] = useState<PreviewMeta | null>(null);
+  const sheetCache = useRef<Map<string, HTMLImageElement>>(new Map());
+  const [, setSheetTick] = useState(0);
+  const lastFrameRef = useRef<{ url: string; col: number; row: number; cols: number; rows: number } | null>(null);
+  const pvMobile = useIsMobile();
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
   const [detail, setDetail] = useState<MinuteDetail | null>(null);
@@ -741,7 +752,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
 
   // Мета scrub-превью (feature B). Для live обновляем реже — растёт seconds_covered.
   useEffect(() => {
-    const load = () => api.get<PreviewMeta>(`/api/streams/${streamId}/previews`)
+    const load = () => api.get<PreviewMeta>(`/api/streams/${streamId}/preview-meta`)
       .then(p => setPreview(p?.available ? p : null))
       .catch(() => setPreview(null));
     load();
@@ -1123,40 +1134,66 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
             })}
           </svg>
 
-          {/* Scrub-preview кадр (feature B) — посекундно, точнее поминутного графика */}
-          {tooltip && preview && tooltip.sec <= preview.seconds_covered && (() => {
-            const frame = Math.floor(tooltip.sec * preview.fps);
-            const per = preview.cols * preview.rows;
-            const sheet = Math.floor(frame / per);
-            if (sheet >= preview.sheet_count) return null;
-            const cell = frame % per;
+          {/* Scrub-preview кадр v2 — оконная загрузка, шаг по зуму, без чёрного */}
+          {tooltip && preview?.available && (() => {
+            const fpw = pvMobile ? preview.fpw_mobile : preview.fpw_desktop;
+            // видимый диапазон в секундах → шаг по лесенке
+            const visSec = viewData.length > 1
+              ? (new Date(viewData[viewData.length - 1].minute).getTime() - new Date(viewData[0].minute).getTime()) / 1000
+              : 60;
+            const step = pvRoundStepUp(preview.step_ladder, visSec / fpw);
+            const wd = step * fpw;
+            const windowStart = Math.floor(Math.max(0, tooltip.sec) / wd) * wd;
+            const gi = Math.max(0, Math.min(fpw - 1, Math.round((tooltip.sec - windowStart) / step)));
+            const sheetIndex = Math.floor(gi / preview.sheet_cells);
+            const cell = gi % preview.sheet_cells;
             const col = cell % preview.cols, rw = Math.floor(cell / preview.cols);
+            const startSec = windowStart + sheetIndex * preview.sheet_cells * step;
+            const url = `${import.meta.env.VITE_API_URL || ''}${preview.sheet_url}?step=${step}&start=${startSec}`;
+
+            // Загрузка листа с кэшем декодированных (без повторной сети/чёрного).
+            let img = sheetCache.current.get(url);
+            if (!img) {
+              img = new Image();
+              img.onload = () => setSheetTick(t => t + 1);
+              img.onerror = () => sheetCache.current.delete(url);
+              img.src = url;
+              sheetCache.current.set(url, img);
+              if (sheetCache.current.size > 40) { // грубый LRU: чистим старое
+                const first = sheetCache.current.keys().next().value as string | undefined;
+                if (first && first !== url) sheetCache.current.delete(first);
+              }
+            }
+            const ready = img.complete && img.naturalWidth > 0;
+
+            // Показать: текущий кадр если готов, иначе последний показанный (не чёрное).
+            let show: { url: string; col: number; row: number; cols: number; rows: number } | null;
+            if (ready) { show = { url, col, row: rw, cols: preview.cols, rows: preview.rows }; lastFrameRef.current = show; }
+            else show = lastFrameRef.current;
+            if (!show) return null;
+
             const DISP_W = 248;
             const scale = DISP_W / preview.cell_w;
             const dispH = Math.round(preview.cell_h * scale);
-            const url = `${import.meta.env.VITE_API_URL || ''}${preview.base}/sheet_${String(sheet).padStart(5, '0')}.jpg`;
             const hh = Math.floor(tooltip.sec / 3600), mm = Math.floor((tooltip.sec % 3600) / 60), ss = tooltip.sec % 60;
             const stamp = `${hh > 0 ? hh + ':' : ''}${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
             return (
               <div style={{
                 position: 'fixed', left: tooltipPos.x + 14, top: tooltipPos.y - 60 - dispH - 10,
-                zIndex: 9999, pointerEvents: 'none',
-                borderRadius: '10px', overflow: 'hidden',
+                zIndex: 9999, pointerEvents: 'none', borderRadius: '10px', overflow: 'hidden',
                 border: '1px solid rgba(255,255,255,0.14)', background: '#000',
                 boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
               }}>
                 <div style={{
                   width: `${DISP_W}px`, height: `${dispH}px`,
-                  backgroundImage: `url(${url})`,
-                  backgroundPosition: `-${col * DISP_W}px -${rw * dispH}px`,
-                  backgroundSize: `${preview.cols * DISP_W}px ${preview.rows * dispH}px`,
+                  backgroundImage: `url(${show.url})`,
+                  backgroundPosition: `-${show.col * DISP_W}px -${show.row * dispH}px`,
+                  backgroundSize: `${show.cols * DISP_W}px ${show.rows * dispH}px`,
                   backgroundRepeat: 'no-repeat',
                 }} />
                 <div style={{
-                  position: 'absolute', bottom: '5px', right: '7px',
-                  fontSize: '10px', fontWeight: 700, color: '#fff',
-                  background: 'rgba(0,0,0,0.6)', padding: '1px 6px', borderRadius: '5px',
-                  fontFamily: 'monospace',
+                  position: 'absolute', bottom: '5px', right: '7px', fontSize: '10px', fontWeight: 700,
+                  color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '1px 6px', borderRadius: '5px', fontFamily: 'monospace',
                 }}>{stamp}</div>
               </div>
             );

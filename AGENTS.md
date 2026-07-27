@@ -579,29 +579,32 @@ fuzzy-поиск Twitch промахивается, и кнопка разово
 
 ## 24. Scrub-preview стрима (feature B, `backend/src/preview/`)
 
-Посекундная раскадровка живого стрима для превью на графике (лучше storyboards
-Twitch — те раз в 5–10с). Спека — [docs/superpowers/specs/2026-07-27-stream-scrub-preview-design.md](docs/superpowers/specs/2026-07-27-stream-scrub-preview-design.md).
+Посекундное превью стрима на графике. **Архитектура v2** (спека —
+[docs/superpowers/specs/2026-07-27-scrub-preview-v2-design.md](docs/superpowers/specs/2026-07-27-scrub-preview-v2-design.md)),
+заменила v1 (плотные JPEG-спрайты 3fps).
 
-- **Флаг `PREVIEW_PIPELINE_ENABLED` (env, дефолт `false`).** Без него sync ничего
-  не делает — фича полностью выключена, изолирует ToS-риск и ресурсы.
-- **`twitchGql.ts` — «серая зона»:** приватный GQL `gql.twitch.tv` (публичный
-  web-client-id) → `PlaybackAccessToken` → usher m3u8 → самый низкий видео-вариант.
-  Не Helix, недокументировано; если сломается — чинить только здесь.
-- **`PreviewWorker.ts`:** на каждый live-канал (лимит 2) спавнит `ffmpeg`
-  (`fps=3,scale=640:-2,tile=6x5`), пакует кадры в спрайт-листы (30 ячеек = 10с) в
-  `PREVIEW_STORAGE_DIR` (том `preview_data`), прогресс → таблица `stream_previews`.
-  Ретенция — 6ч-джоба, чистит старше 30д. **ffmpeg добавлен в backend-образ.**
-- Раздача спрайтов — публичный статик `/previews` (кадры не секретны).
-- **Локально не проверяется** (нужны ffmpeg + живой стрим + том) — только прод.
-  Live-край отстаёт ~10с. VOD-id (для клика в VOD, B3) тянется best-effort через Helix.
-- **VOD-backfill (B1.5):** раскадровка прошлых записей за `PREVIEW_BACKFILL_DAYS`
-  (дефолт 14) — `scanBackfill()` матчит архивы Helix к сессиям по времени старта,
-  очередь с 1 воркером, потолок `PREVIEW_MAX_GB` (дефолт 5), VOD-ветка usher
-  (`/vod/<id>.m3u8`). Twitch хранит VOD 7–60 дней — старше обработать нельзя.
-- **Сделано полностью (за флагом):** B1 (live-ингест), B1.5 (VOD-backfill),
-  **B2** (`GET /api/streams/:id/previews` — мета спрайтов), **B3** (`StreamAreaChart`:
-  наведение → кадр-поповер посекундно; Shift+клик → VOD `?t=`). Флаг env-based
-  (`PREVIEW_PIPELINE_ENABLED`), UI-тумблера нет — включается на хосте.
+- **Флаг `PREVIEW_PIPELINE_ENABLED` (env, дефолт `false`).** Всё за ним; ToS-«серая
+  зона» (`twitchGql.ts`: приватный GQL → usher m3u8) изолирована в одном файле.
+- **База — 1 fps, 640×360, отдельные WebP-кадры** (`frames/<session>/f_%06d.webp`),
+  ingest через `ffmpeg fps=1 -c:v libwebp` (live + backfill). `PreviewWorker.ts`.
+- **Листы (спрайты 5×3=15 кадров) генерятся ЛЕНИВО по запросу** из базовых кадров
+  (`sheets.ts`, `sharp`): singleflight, атомарная запись, семафор `min(4,cpu-1)`,
+  дисковый кэш TTL 24ч / лимит `PREVIEW_SHEET_CACHE_GB` (2ГБ), LRU. Идентичность
+  листа = `(step, startSec)` → ПК и мобилка делят кэш. Обзорный (грубый) уровень
+  предгенерится по завершении набора кадров; остальные — только при обращении.
+- **Эндпоинты:** `GET /api/streams/:id/preview-meta` (authed, мета: frame_count,
+  duration_sec, лесенка шагов, размеры окна ПК/моб); `GET /preview-sheet/:id?step=&start=`
+  (публичный, генерит-по-промаху и отдаёт WebP, immutable).
+- **Математика** (`previewMath.ts`, покрыта тестом): лесенка шага
+  `1,2,5,10,20,30,60,120,300,600`; окно = `step×fpw` (fpw 60 ПК / 30 моб);
+  `windowStart=floor(t/окно)×окно`; адрес `sheetIndex/cell/col/row`.
+- **Фронт** (`StreamAreaChart`): по мете считает шаг от зума, грузит листы окна,
+  кэширует декодированные, при зуме/промахе показывает последний кадр (без чёрного),
+  Shift+клик → VOD `?t=`. Адаптив ПК/моб.
+- **Ретенция:** базовые кадры — `PREVIEW_FRAMES_DAYS` (30д); листы — кэш 24ч.
+- **Локально не проверяется** (нужны ffmpeg+sharp+живой стрим+том) — только прод.
+  Нужен **персистентный том** под `frames/`, иначе теряются при рестарте (есть
+  само-восстановление: `scanBackfill` перегенерит при отсутствии кадров).
 - Метрики: `afsyg_preview_workers_active`, `afsyg_preview_sheets_total{result}`,
   `afsyg_preview_ingest_errors_total{stage}`.
 

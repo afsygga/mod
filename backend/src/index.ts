@@ -40,6 +40,8 @@ import { wsHandler } from './websocket/wsHandler';
 import { loadSuspicion, loadPoints } from './utils/suspicion';
 import { SteamSync } from './steam/SteamSync';
 import { PreviewWorker } from './preview/PreviewWorker';
+import { ensureSheet } from './preview/sheets';
+import { STEP_LADDER } from './preview/previewMath';
 import { logger } from './utils/logger';
 
 const app = express();
@@ -95,11 +97,21 @@ app.get('/metrics', async (_req, res) => {
     res.status(500).end(String(err));
   }
 });
-// Scrub-preview sprite sheets (feature B) — non-sensitive stream thumbnails,
-// served statically so <img> can load them without auth headers. Immutable.
-app.use('/previews', express.static(process.env.PREVIEW_STORAGE_DIR || '/app/previews', {
-  maxAge: '7d', immutable: true, fallthrough: true,
-}));
+// Scrub-preview лист (feature B, v2) — публично, чтобы <img> грузил без auth-хедеров.
+// Генерится по запросу (singleflight+кэш) из базовых кадров. Кадры не секретны.
+app.get('/preview-sheet/:id', async (req, res) => {
+  const id = parseInt(req.params.id);
+  const step = parseInt(String(req.query.step));
+  const start = parseInt(String(req.query.start));
+  if (![id, step, start].every(Number.isFinite) || step <= 0 || start < 0) return res.status(400).end();
+  if (!(STEP_LADDER as readonly number[]).includes(step) || start % (15 * step) !== 0) return res.status(400).end();
+  try {
+    const p = await ensureSheet(id, step, start);
+    if (!p) return res.status(404).end();
+    res.set('Cache-Control', 'public, max-age=86400, immutable');
+    res.sendFile(p);
+  } catch { res.status(500).end(); }
+});
 
 app.use('/api/auth', rateLimit(10), authRouter);
 app.use('/api/twitch-creds', twitchCredsRouter);
@@ -217,6 +229,10 @@ async function runMigrations() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    // scrub-preview v2: базовый слой 1 fps WebP-кадров вместо плотных JPEG-листов.
+    await db.query(`ALTER TABLE stream_previews ADD COLUMN IF NOT EXISTS frame_count INTEGER DEFAULT 0`);
+    await db.query(`ALTER TABLE stream_previews ADD COLUMN IF NOT EXISTS duration_sec INTEGER DEFAULT 0`);
+    await db.query(`ALTER TABLE stream_previews ADD COLUMN IF NOT EXISTS preview_version VARCHAR(16)`);
     await db.query(`
       CREATE TABLE IF NOT EXISTS twitch_user_meta (
         username VARCHAR(64) PRIMARY KEY,
