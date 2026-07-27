@@ -663,6 +663,13 @@ function SparkLine({ data, color, w = 80, h = 28 }: { data: number[]; color: str
   );
 }
 
+interface PreviewMeta {
+  available: boolean;
+  base: string; vod_id: string | null;
+  fps: number; cell_w: number; cell_h: number;
+  cols: number; rows: number; sheet_count: number; seconds_covered: number;
+}
+
 function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   streamId: number;
   isLive: boolean;
@@ -673,7 +680,8 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   const [loading, setLoading] = useState(true);
   const [viewStart, setViewStart] = useState(0);
   const [viewEnd, setViewEnd] = useState(0);
-  const [tooltip, setTooltip] = useState<{ svgX: number; idx: number } | null>(null);
+  const [tooltip, setTooltip] = useState<{ svgX: number; idx: number; sec: number } | null>(null);
+  const [preview, setPreview] = useState<PreviewMeta | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
   const [detail, setDetail] = useState<MinuteDetail | null>(null);
@@ -730,6 +738,17 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
   }, [streamId]);
 
   useEffect(() => { fetchGames(); }, [fetchGames]);
+
+  // Мета scrub-превью (feature B). Для live обновляем реже — растёт seconds_covered.
+  useEffect(() => {
+    const load = () => api.get<PreviewMeta>(`/api/streams/${streamId}/previews`)
+      .then(p => setPreview(p?.available ? p : null))
+      .catch(() => setPreview(null));
+    load();
+    if (!isLive) return;
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, [streamId, isLive]);
 
   useEffect(() => {
     if (!isLive) return;
@@ -844,8 +863,14 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
     setPanning(false);
     // Treat as click (not drag) when the mouse barely moved
     if (start && Math.abs(e.clientX - start.clientX) < 5 && tooltip) {
-      const d = viewData[tooltip.idx];
-      if (d) openMinute(d.minute);
+      if (e.shiftKey && preview?.vod_id) {
+        const s = tooltip.sec;
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sc = s % 60;
+        window.open(`https://www.twitch.tv/videos/${preview.vod_id}?t=${h}h${m}m${sc}s`, '_blank', 'noopener');
+      } else {
+        const d = viewData[tooltip.idx];
+        if (d) openMinute(d.minute);
+      }
     }
   };
 
@@ -857,7 +882,17 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
     const fraction = Math.max(0, Math.min(1, px / CHART_W));
     const idx = Math.round(fraction * (viewData.length - 1));
     const svgX = Y_LABEL_W + (idx / Math.max(1, viewData.length - 1)) * CHART_W;
-    setTooltip({ svgX, idx });
+    // Точная секунда под курсором (интерполяция между минутными точками) — для
+    // посекундного превью, которое точнее самого поминутного графика.
+    let sec = 0;
+    if (viewData.length > 0) {
+      const posF = fraction * (viewData.length - 1);
+      const i0 = Math.floor(posF), i1 = Math.min(viewData.length - 1, i0 + 1), fr = posF - i0;
+      const t0 = new Date(viewData[i0].minute).getTime();
+      const t1 = new Date(viewData[i1].minute).getTime();
+      sec = Math.max(0, Math.round((t0 + (t1 - t0) * fr - new Date(startedAt).getTime()) / 1000));
+    }
+    setTooltip({ svgX, idx, sec });
     setTooltipPos({ x: e.clientX, y: e.clientY });
   };
 
@@ -967,7 +1002,7 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
               Активность по минутам
             </span>
             <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', textTransform: 'none', letterSpacing: 0 }}>
-              клик по графику — детали минуты
+              клик — детали минуты{preview?.vod_id ? ' · Shift+клик — VOD' : ''}
             </span>
           </div>
           {/* LIVE badge */}
@@ -1087,6 +1122,45 @@ function StreamAreaChart({ streamId, isLive, startedAt, endedAt }: {
               );
             })}
           </svg>
+
+          {/* Scrub-preview кадр (feature B) — посекундно, точнее поминутного графика */}
+          {tooltip && preview && tooltip.sec <= preview.seconds_covered && (() => {
+            const frame = Math.floor(tooltip.sec * preview.fps);
+            const per = preview.cols * preview.rows;
+            const sheet = Math.floor(frame / per);
+            if (sheet >= preview.sheet_count) return null;
+            const cell = frame % per;
+            const col = cell % preview.cols, rw = Math.floor(cell / preview.cols);
+            const DISP_W = 248;
+            const scale = DISP_W / preview.cell_w;
+            const dispH = Math.round(preview.cell_h * scale);
+            const url = `${import.meta.env.VITE_API_URL || ''}${preview.base}/sheet_${String(sheet).padStart(5, '0')}.jpg`;
+            const hh = Math.floor(tooltip.sec / 3600), mm = Math.floor((tooltip.sec % 3600) / 60), ss = tooltip.sec % 60;
+            const stamp = `${hh > 0 ? hh + ':' : ''}${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+            return (
+              <div style={{
+                position: 'fixed', left: tooltipPos.x + 14, top: tooltipPos.y - 60 - dispH - 10,
+                zIndex: 9999, pointerEvents: 'none',
+                borderRadius: '10px', overflow: 'hidden',
+                border: '1px solid rgba(255,255,255,0.14)', background: '#000',
+                boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
+              }}>
+                <div style={{
+                  width: `${DISP_W}px`, height: `${dispH}px`,
+                  backgroundImage: `url(${url})`,
+                  backgroundPosition: `-${col * DISP_W}px -${rw * dispH}px`,
+                  backgroundSize: `${preview.cols * DISP_W}px ${preview.rows * dispH}px`,
+                  backgroundRepeat: 'no-repeat',
+                }} />
+                <div style={{
+                  position: 'absolute', bottom: '5px', right: '7px',
+                  fontSize: '10px', fontWeight: 700, color: '#fff',
+                  background: 'rgba(0,0,0,0.6)', padding: '1px 6px', borderRadius: '5px',
+                  fontFamily: 'monospace',
+                }}>{stamp}</div>
+              </div>
+            );
+          })()}
 
           {/* Floating tooltip */}
           {tooltip && tooltipData && (

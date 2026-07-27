@@ -297,6 +297,36 @@ streamsRouter.get('/:id/games', async (req: Request, res: Response) => {
   }
 });
 
+// Scrub-preview мета для сессии (feature B): как маппить секунду в спрайт/ячейку.
+// Фронт по этим полям вычисляет URL листа и позицию кадра при наведении.
+streamsRouter.get('/:id/previews', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
+    const { rows } = await db.query(
+      `SELECT vod_id, fps, cell_w, cell_h, cols, rows, sheet_count, seconds_covered
+       FROM stream_previews WHERE session_id=$1`,
+      [id]
+    );
+    if (rows.length === 0 || (rows[0].sheet_count ?? 0) === 0) {
+      return res.json({ available: false });
+    }
+    const p = rows[0];
+    res.json({
+      available: true,
+      base: `/previews/${id}`,          // <base>/sheet_00000.jpg
+      vod_id: p.vod_id || null,
+      fps: p.fps,
+      cell_w: p.cell_w, cell_h: p.cell_h,
+      cols: p.cols, rows: p.rows,
+      sheet_count: p.sheet_count,
+      seconds_covered: p.seconds_covered,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'previews failed' });
+  }
+});
+
 // Per-minute message data for a stream session (for zoomed chart)
 streamsRouter.get('/:id/messages-by-minute', async (req: Request, res: Response) => {
   try {
