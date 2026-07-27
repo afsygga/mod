@@ -42,7 +42,7 @@ export default function App() {
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('dashboard');
-  const [lang, setLang] = useState<Lang>('en');
+  const [lang, setLang] = useState<Lang>('ru');
   const [channels, setChannels] = useState<Channel[]>([]);
   const [activeChannel, setActiveChannel] = useState('all');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -383,8 +383,8 @@ export default function App() {
             ['dashboard', t.dashboard, LayoutDashboard],
             ['logs', t.logs, ScrollText],
             ['settings', t.settings, SettingsIcon],
-            ['streams', 'Стримы', Radio] as const,
-            ['analytics', 'Аналитика', BarChart2] as const,
+            ['streams', t.streams, Radio] as const,
+            ['analytics', t.analytics, BarChart2] as const,
             ...(user.role === 'admin' ? [
               ['admin', 'Admin', ShieldCheck] as const,
             ] : []),

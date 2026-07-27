@@ -69,16 +69,24 @@ export function AdminPanel() {
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
-        {tab === 'overview' && <Overview />}
-        {tab === 'health' && <HealthTab />}
-        {tab === 'users' && <UsersTab />}
-        {tab === 'whitelist' && <WhitelistTab />}
-        {tab === 'channels' && <ChannelsTab />}
-        {tab === 'steam' && <SteamTab />}
-        {tab === 'bans' && <BansTab />}
-        {tab === 'logs' && <LogsTab />}
-        {tab === 'moderators' && <ModeratorsTab />}
-        {tab === 'audit' && <AuditTab />}
+        <AnimatePresence mode="wait">
+          <motion.div key={tab}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
+            {tab === 'overview' && <Overview />}
+            {tab === 'health' && <HealthTab />}
+            {tab === 'users' && <UsersTab />}
+            {tab === 'whitelist' && <WhitelistTab />}
+            {tab === 'channels' && <ChannelsTab />}
+            {tab === 'steam' && <SteamTab />}
+            {tab === 'bans' && <BansTab />}
+            {tab === 'logs' && <LogsTab />}
+            {tab === 'moderators' && <ModeratorsTab />}
+            {tab === 'audit' && <AuditTab />}
+          </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   );
