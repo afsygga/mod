@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
 import { broadcast } from '../websocket/wsHandler';
+import { getAppToken } from '../twitch/twitchToken';
 import { jobStart, jobEnd, recordSteamApi, recordSteamCategoryChange, setSteamLinks } from '../utils/metrics';
 
 /*
@@ -165,11 +166,15 @@ export class SteamSync {
 
     const byId = new Map<string, any>(players.map((p: any) => [String(p.steamid), p]));
 
-    // Кто сейчас в эфире — смена категории имеет смысл только для них.
-    const { rows: liveRows } = await db.query(
-      'SELECT DISTINCT channel_name FROM stream_sessions WHERE ended_at IS NULL'
-    );
-    const liveNow = new Set<string>(liveRows.map((r: any) => String(r.channel_name).toLowerCase()));
+    // Кто сейчас в эфире — определяем НЕЗАВИСИМО через Helix (не через
+    // stream_sessions/дашборд), чтобы whitelist Steam работал для каналов,
+    // которых НЕТ на дашборде (без рендера стрима и модерации).
+    const liveNow = await this.fetchLiveSet(active.map(l => l.channel_name));
+    if (liveNow === null) {
+      // Helix недоступен — не меняем категорию вслепую, ждём следующий тик.
+      logger.warn('[steam] live-detect via Helix unavailable, skipping tick');
+      return 'error';
+    }
 
     const exitCat = await this.exitCategory();
     const offlineEnabled = await this.isOfflineEnabled();
@@ -247,6 +252,32 @@ export class SteamSync {
 
     this.liveBefore = liveNow;
     return hadFailure ? 'partial' : 'success';
+  }
+
+  /**
+   * Кто из привязанных каналов сейчас в эфире — по Helix, независимо от дашборда.
+   * Возвращает Set логинов в нижнем регистре, либо null при недоступности Helix
+   * (тогда тик пропускается, чтобы не менять категорию вслепую). Helix /streams
+   * принимает до 100 user_login за запрос — одного запроса хватает.
+   */
+  private async fetchLiveSet(channels: string[]): Promise<Set<string> | null> {
+    const clientId = process.env.TWITCH_CLIENT_ID;
+    const token = await getAppToken();
+    if (!clientId || !token) return null;
+    const logins = [...new Set(channels.map(c => c.toLowerCase()))].slice(0, 100);
+    if (logins.length === 0) return new Set();
+    const qs = logins.map(l => `user_login=${encodeURIComponent(l)}`).join('&');
+    try {
+      const r = await fetch(`https://api.twitch.tv/helix/streams?${qs}&first=100`, {
+        headers: { 'Client-ID': clientId, Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) { logger.warn(`[steam] helix streams ${r.status}`); return null; }
+      const data: any = await r.json();
+      return new Set<string>((data?.data || []).map((s: any) => String(s.user_login).toLowerCase()));
+    } catch (err: any) {
+      logger.warn(`[steam] helix streams failed: ${err?.message || err}`);
+      return null;
+    }
   }
 
   /** Ручное соответствие важнее fuzzy-поиска Twitch внутри setGame. */

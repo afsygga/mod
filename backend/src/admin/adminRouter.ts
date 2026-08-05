@@ -599,7 +599,14 @@ adminRouter.delete('/streams', async (req: Request, res: Response) => {
 adminRouter.get('/steam', async (_req: Request, res: Response) => {
   try {
     const [{ rows: links }, { rows: settings }, { rows: mappings }] = await Promise.all([
-      db.query(`SELECT l.*, (s.channel_name IS NOT NULL) AS is_live
+      db.query(`SELECT l.*, (s.channel_name IS NOT NULL) AS is_live,
+                  (EXISTS (SELECT 1 FROM users u
+                             WHERE LOWER(u.twitch_username)=LOWER(l.channel_name)
+                               AND u.twitch_oauth IS NOT NULL
+                               AND COALESCE(u.twitch_auth_status,'active') <> 'reauthorization_required')
+                   OR EXISTS (SELECT 1 FROM broadcaster_tokens b
+                               WHERE LOWER(b.twitch_login)=LOWER(l.channel_name)
+                                 AND COALESCE(b.auth_status,'active') <> 'reauthorization_required')) AS authorized
                 FROM steam_links l
                 LEFT JOIN (SELECT DISTINCT channel_name FROM stream_sessions WHERE ended_at IS NULL) s
                   ON LOWER(s.channel_name) = LOWER(l.channel_name)

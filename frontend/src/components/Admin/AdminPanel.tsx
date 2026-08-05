@@ -1120,6 +1120,7 @@ interface SteamLinkRow {
   channel_name: string; steam_id64: string; enabled: boolean;
   last_game: string | null; last_change_at: string | null;
   last_synced_at: string | null; last_result: string | null; is_live: boolean;
+  authorized: boolean;
 }
 interface SteamSeen {
   steamId: string; personaName: string | null; game: string | null;
@@ -1402,8 +1403,8 @@ function SteamTab() {
 
       {/* Каналы */}
       <AdminSection
-        icon={Tv2} color="#00e5cc" title="Привязанные каналы"
-        subtitle="Канал ↔ SteamID64 стримера. Смену категории делает токен самого стримера — тот же, что нужен для !g."
+        icon={Tv2} color="#00e5cc" title="Привязанные каналы (whitelist автосмены)"
+        subtitle="Канал ↔ SteamID64. Автосмена работает НЕЗАВИСИМО от дашборда: канал сюда добавлять не нужно на дашборд (нет рендера стрима/модерации). Условие — канал включён здесь И стример авторизован (бейдж «АВТОРИЗОВАН»). Live определяется сам через Twitch."
         right={
           <button onClick={syncNow} disabled={syncing} style={{
             display: 'flex', alignItems: 'center', gap: '6px',
@@ -1457,6 +1458,12 @@ function SteamTab() {
                     {!l.enabled && (
                       <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>выключен</span>
                     )}
+                    <span title={l.authorized ? 'Стример авторизован — смена категории сработает' : 'Нет токена стримера — авторизуйтесь через /broadcaster или вход через Twitch'} style={{
+                      fontSize: '9px', fontWeight: 800, letterSpacing: '0.06em',
+                      color: l.authorized ? '#00c878' : '#ffb020',
+                      background: l.authorized ? 'rgba(0,200,120,0.12)' : 'rgba(255,176,32,0.12)',
+                      padding: '2px 7px', borderRadius: '20px',
+                    }}>{l.authorized ? 'АВТОРИЗОВАН' : 'НЕТ ТОКЕНА'}</span>
 
                     <span style={{ flex: 1 }} />
 
