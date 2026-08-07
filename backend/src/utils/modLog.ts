@@ -42,7 +42,40 @@ async function insertRow(e: ModLogEntry, primaryId: number | null): Promise<numb
   }
 }
 
+// Один и тот же нарушитель не должен считаться дважды у одного мода: сколько бы
+// раз мод ни замутил того же юзера в рамках сессии, в статистике остаётся ОДНА
+// строка — последняя. Повторный мут тем же модом обновляет её (время/длительность),
+// а не плодит дубль. Pile-on разных модов при этом сохраняется (проверка по
+// performed_by), см. §18.
+const SAME_MOD_DEDUP_WINDOW = '6 hours';
+
 export async function logModerationAction(e: ModLogEntry): Promise<ModLogResult> {
+  if (e.action === 'MUTED' || e.action === 'AUTO_MUTED') {
+    try {
+      const { rows } = await db.query(
+        `SELECT id FROM moderation_logs
+         WHERE channel_name=$1 AND LOWER(username)=LOWER($2) AND performed_by=$3
+           AND action IN ('MUTED','AUTO_MUTED')
+           AND created_at > NOW() - INTERVAL '${SAME_MOD_DEDUP_WINDOW}'
+         ORDER BY created_at DESC LIMIT 1`,
+        [e.channel, e.username, e.performedBy]
+      );
+      if (rows[0]) {
+        // Тот же мод уже мутил этого юзера — обновляем прошлую строку на последний
+        // мут (без нового ряда, без инкремента mute_count) → нет дубликата.
+        await db.query(
+          `UPDATE moderation_logs
+           SET action=$2, duration_seconds=$3, message=$4, created_at=NOW()
+           WHERE id=$1`,
+          [rows[0].id, e.action, e.durationSeconds ?? null, e.message ?? null]
+        );
+        return 'skipped';
+      }
+    } catch (err: any) {
+      logger.warn(`[modlog] same-mod dedup failed: ${err?.message || err}`);
+    }
+  }
+
   if (PUNITIVE.has(e.action)) {
     try {
       // Anchor on the most recent PRIMARY punitive/unban row for this user.
