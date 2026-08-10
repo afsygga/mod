@@ -48,9 +48,11 @@ const SCOPES = [
   'moderator:read:blocked_terms',
   'moderator:read:chat_settings',
   'moderator:read:unban_requests',
+  'moderator:manage:unban_requests',
   'moderator:read:warnings',
   'moderator:read:vips',
   'moderator:read:suspicious_users',
+  'user:read:moderated_channels',
 ].join(' ');
 
 function getRedirectUri(req: Request): string {
