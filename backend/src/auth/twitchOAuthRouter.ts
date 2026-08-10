@@ -196,6 +196,25 @@ twitchOAuthRouter.get('/callback', async (req: Request, res: Response) => {
   }
 });
 
+// ── Client login (implicit) — токен для стороннего клиента (Chatterino) ───────
+// Implicit-флоу: response_type=token → access-токен приходит во ФРАГМЕНТ URL
+// прямо в браузер пользователя (`/client_login#access_token=...`), на сервер НЕ
+// попадает, в БД НЕ сохраняется, client_secret не нужен. Полный набор SCOPES.
+// Требует, чтобы `${FRONTEND_URL}/client_login` был зарегистрирован как OAuth
+// Redirect URL в консоли Twitch-приложения.
+twitchOAuthRouter.get('/client-connect', (req: Request, res: Response) => {
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  if (!clientId) return res.status(500).json({ error: 'TWITCH_CLIENT_ID not set' });
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: `${getFrontendUrl()}/client_login`,
+    response_type: 'token',
+    scope: SCOPES,
+    force_verify: 'true',
+  });
+  res.redirect(`https://id.twitch.tv/oauth2/authorize?${params}`);
+});
+
 // ── Broadcaster connect (no site account required) ───────────────────────────
 
 twitchOAuthRouter.get('/broadcaster-connect', (req: Request, res: Response) => {
