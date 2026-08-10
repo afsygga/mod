@@ -151,7 +151,11 @@ authRouter.delete('/sessions/:id', authenticate, async (req: Request, res: Respo
   res.json({ success: true });
 });
 
-// Public — returns the Google client ID so frontend doesn't need to hardcode
+// Public — client IDs are public. Twitch client id нужен странице /client_login,
+// чтобы client-side собрать строку импорта Chatterino (и дёрнуть Helix /users).
 authRouter.get('/config', (_req: Request, res: Response) => {
-  res.json({ google_client_id: process.env.GOOGLE_CLIENT_ID || null });
+  res.json({
+    google_client_id: process.env.GOOGLE_CLIENT_ID || null,
+    twitch_client_id: process.env.TWITCH_CLIENT_ID || null,
+  });
 });
