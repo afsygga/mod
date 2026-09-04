@@ -354,6 +354,20 @@ async function runMigrations() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    // Дефолт «на что переключать при выходе из игры». ON CONFLICT DO NOTHING:
+    // если админ уже задал значение (в т.ч. пустое = «не трогать»), оно живёт.
+    await db.query(
+      "INSERT INTO settings (key, value) VALUES ('steam_exit_category', 'Just Chatting') ON CONFLICT (key) DO NOTHING"
+    );
+    // One-time: модератор сменил ник l1vme → welluvme. Старые записи modlog
+    // (performed_by = twitch-логин из EventSub) остались под старым ником и
+    // выпали из статистики. Переносим их на новый ник.
+    const { rows: mergeFlag } = await db.query("SELECT 1 FROM settings WHERE key='merge_l1vme_welluvme_2026_09_04'");
+    if (mergeFlag.length === 0) {
+      const moved = await db.query("UPDATE moderation_logs SET performed_by='welluvme' WHERE LOWER(performed_by)='l1vme'");
+      await db.query("INSERT INTO settings (key, value) VALUES ('merge_l1vme_welluvme_2026_09_04','done') ON CONFLICT (key) DO NOTHING");
+      logger.info(`One-time mod nick merge l1vme → welluvme: ${moved.rowCount} moderation_logs rows moved`);
+    }
     // One-time clean slate: wipe old stream history + chat messages so backend
     // tracking starts fresh from 2026-07-01. Guarded by a flag so it runs once.
     const { rows: resetFlag } = await db.query("SELECT 1 FROM settings WHERE key='reset_streams_2026_07_01'");
