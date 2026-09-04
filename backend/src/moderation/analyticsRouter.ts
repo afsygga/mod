@@ -329,6 +329,10 @@ analyticsRouter.get('/moderators/:username/profile', async (req: Request, res: R
   try {
     const username = req.params.username;
     const channel = (req.query.channel as string) || null;
+    // Пагинация списка действий: по умолчанию хвост из 20, «показать ещё»
+    // догружает дальше. Вся история в БД доступна, лимит только на страницу.
+    const actionsLimit = Math.min(Math.max(parseInt(String(req.query.actions_limit), 10) || 20, 1), 200);
+    const actionsOffset = Math.max(parseInt(String(req.query.actions_offset), 10) || 0, 0);
 
     // performed_by may be a Twitch login (EventSub / external) or a site email.
     // Match logs where performed_by is the given login OR the email of the user
@@ -357,8 +361,8 @@ analyticsRouter.get('/moderators/:username/profile', async (req: Request, res: R
       db.query(`
         SELECT action, username AS target_username, channel_name, created_at FROM moderation_logs ml
         WHERE ${actorClause} AND ($2::text IS NULL OR channel_name=$2)
-        ORDER BY created_at DESC LIMIT 20
-      `, [username, channel]),
+        ORDER BY created_at DESC LIMIT $3 OFFSET $4
+      `, [username, channel, actionsLimit, actionsOffset]),
       // Real mute reaction time: seconds from the muted user's last message to the mute
       db.query(`
         SELECT ROUND(AVG(EXTRACT(EPOCH FROM (ml.created_at - m.msg_time)))::numeric, 1) AS avg_response_sec

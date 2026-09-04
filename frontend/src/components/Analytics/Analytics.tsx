@@ -164,13 +164,29 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   const [profile, setProfile] = useState<ModProfile | null>(null);
   const [profileChannel, setProfileChannel] = useState(channel);
   const [hoverDay, setHoverDay] = useState<number | null>(null);
+  // Полный список действий: стартуем с хвоста из профиля, «Показать ещё»
+  // догружает историю страницами — вся база доступна, не только последние 20.
+  const [actions, setActions] = useState<ModProfile['recent_actions']>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     const username = mod.twitch_login;
     const ch = profileChannel || '';
+    setActions([]);
     api.get<ModProfile>(`/api/analytics/moderators/${encodeURIComponent(username)}/profile?channel=${encodeURIComponent(ch)}`)
-      .then(setProfile).catch(() => {});
+      .then(p => { setProfile(p); setActions(p.recent_actions || []); }).catch(() => {});
   }, [mod.twitch_login, profileChannel]);
+
+  const loadMoreActions = () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    const username = mod.twitch_login;
+    const ch = profileChannel || '';
+    api.get<ModProfile>(`/api/analytics/moderators/${encodeURIComponent(username)}/profile?channel=${encodeURIComponent(ch)}&actions_limit=100&actions_offset=${actions.length}`)
+      .then(p => setActions(prev => [...prev, ...(p.recent_actions || [])]))
+      .catch(() => {})
+      .finally(() => setLoadingMore(false));
+  };
 
   const rankColors = ['#ffc800', '#9e9e9e', '#cd7f32'];
   const rankColor = rankColors[rank - 1] || 'rgba(255,255,255,0.3)';
@@ -266,7 +282,7 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
   const totalAct = profile?.action_breakdown.reduce((s, a) => s + a.c, 0) || 1;
 
   const hasActionData = !!(profile && profile.action_breakdown.length > 0);
-  const hasRecentData = !!(profile && profile.recent_actions.length > 0);
+  const hasRecentData = actions.length > 0;
 
   const sectionCard: React.CSSProperties = {
     padding: '14px', borderRadius: '14px',
@@ -601,8 +617,8 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
           {/* Recent actions */}
           {hasRecentData ? (
             <div style={sectionCard}>
-              <div style={sectionTitle}>Последние действия</div>
-              {profile!.recent_actions.map((a, i) => {
+              <div style={sectionTitle}>Последние действия · {actions.length} из {totalAct}</div>
+              {actions.map((a, i) => {
                 const color = ACTION_COLOR[a.action] || '#888';
                 return (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
@@ -617,6 +633,21 @@ function ModProfileModal({ mod, rank, channel, channels, onClose }: {
                   </div>
                 );
               })}
+              {actions.length < totalAct && (
+                <button
+                  onClick={loadMoreActions}
+                  disabled={loadingMore}
+                  style={{
+                    width: '100%', marginTop: '10px', padding: '8px 0',
+                    borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)',
+                    background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.6)',
+                    fontSize: '11px', fontWeight: 600, cursor: loadingMore ? 'default' : 'pointer',
+                    opacity: loadingMore ? 0.5 : 1,
+                  }}
+                >
+                  {loadingMore ? 'Загрузка…' : `Показать ещё (осталось ${totalAct - actions.length})`}
+                </button>
+              )}
             </div>
           ) : emptyLine('Последние действия')}
         </div>
