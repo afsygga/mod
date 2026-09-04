@@ -369,6 +369,18 @@ async function runMigrations() {
       await db.query("INSERT INTO settings (key, value) VALUES ('merge_welluvme_l1vme_2026_09_04','done') ON CONFLICT (key) DO NOTHING");
       logger.info(`One-time mod nick merge welluvme → l1vme: ${moved.rowCount} moderation_logs rows moved`);
     }
+    // One-time (продолжение слияния welluvme → l1vme): действия из Chatterino
+    // EventSub нормализует в EMAIL аккаунта сайта (см. EventSubManager), поэтому
+    // старые записи мода лежат под его email-ом, а не под ником. Переносим на
+    // литеральный логин l1vme записи с email-а, чей аккаунт ещё привязан к
+    // старому нику welluvme. users.twitch_username сознательно не трогаем.
+    const { rows: mergeFlag2 } = await db.query("SELECT 1 FROM settings WHERE key='merge_welluvme_email_l1vme_2026_09_04'");
+    if (mergeFlag2.length === 0) {
+      const moved = await db.query(`UPDATE moderation_logs SET performed_by='l1vme'
+        WHERE performed_by IN (SELECT email FROM users WHERE LOWER(twitch_username)='welluvme')`);
+      await db.query("INSERT INTO settings (key, value) VALUES ('merge_welluvme_email_l1vme_2026_09_04','done') ON CONFLICT (key) DO NOTHING");
+      logger.info(`One-time mod email merge (welluvme-linked) → l1vme: ${moved.rowCount} rows moved`);
+    }
     // One-time clean slate: wipe old stream history + chat messages so backend
     // tracking starts fresh from 2026-07-01. Guarded by a flag so it runs once.
     const { rows: resetFlag } = await db.query("SELECT 1 FROM settings WHERE key='reset_streams_2026_07_01'");
