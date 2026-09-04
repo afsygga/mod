@@ -13,8 +13,10 @@ import { jobStart, jobEnd, recordSteamApi, recordSteamCategoryChange, setSteamLi
  *
  * - Push-уведомлений у Steam нет вообще, только опрос. GetPlayerSummaries
  *   принимает до 100 steamid за раз, поэтому все привязанные каналы
- *   опрашиваются ОДНИМ запросом раз в минуту — лимит Steam (100k/сутки) при
- *   этом не приближается даже близко.
+ *   опрашиваются ОДНИМ запросом. Интервал адаптивный: пока хоть один
+ *   привязанный канал в эфире — каждые 10с (чтобы запуск/выход из игры
+ *   подхватывался быстро), иначе раз в минуту. Даже на быстром интервале это
+ *   ~8.6k запросов/сутки — лимит Steam (100k/сутки) не приближается близко.
  *
  * - Реагируем на СМЕНУ игры, а не на её наличие. Если бы категория
  *   выставлялась на каждом тике, ручная правка категории стримером
@@ -34,7 +36,11 @@ import { jobStart, jobEnd, recordSteamApi, recordSteamCategoryChange, setSteamLi
  * ни лаунчеры, ни браузерные игры сюда не попадают.
  */
 
-const POLL_INTERVAL_MS = 60_000;
+/** Никто из привязанных не в эфире — опрос раз в минуту. */
+const POLL_IDLE_MS = 60_000;
+/** Хоть один привязанный канал в эфире — быстрый опрос, чтобы смена игры
+ *  (и выход из неё → exit-категория) применялась за секунды, а не за минуту. */
+const POLL_LIVE_MS = 10_000;
 const STEAM_API = 'https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/';
 
 interface SteamLink {
@@ -81,7 +87,9 @@ export class SteamSync {
         logger.error(`[steam] sync error: ${err?.message || err}`);
       } finally {
         jobEnd('steam_sync', result, startedAt);
-        this.timer = setTimeout(tick, POLL_INTERVAL_MS);
+        // Адаптивный интервал: liveBefore заполняется в syncOnce и чистится на
+        // ранних выходах (нет ключа/выключено/нет привязок) — тогда 60с.
+        this.timer = setTimeout(tick, this.liveBefore.size > 0 ? POLL_LIVE_MS : POLL_IDLE_MS);
       }
     };
     tick();
@@ -130,16 +138,17 @@ export class SteamSync {
         logger.warn('[steam] STEAM_API_KEY not set — Steam sync disabled');
         this.warnedNoKey = true;
       }
+      this.liveBefore.clear(); // не опрашиваем — не держим быстрый интервал
       return 'success'; // не настроено ≠ сломано
     }
     this.warnedNoKey = false;
 
     const { rows: links } = await db.query<SteamLink>('SELECT * FROM steam_links');
     setSteamLinks(links.filter(l => l.enabled).length, links.filter(l => !l.enabled).length);
-    if (!(await this.isGloballyEnabled())) return 'success';
+    if (!(await this.isGloballyEnabled())) { this.liveBefore.clear(); return 'success'; }
 
     const active = links.filter(l => l.enabled && l.steam_id64);
-    if (active.length === 0) return 'success';
+    if (active.length === 0) { this.liveBefore.clear(); return 'success'; }
 
     // Один запрос на всех (Steam принимает до 100 id).
     const ids = active.map(l => l.steam_id64).slice(0, 100);
