@@ -81,6 +81,7 @@ const SCOPES = [
   'user:read:follows',
   'moderator:manage:blocked_terms',
   'moderator:manage:suspicious_users',
+  'moderator:read:followers', // EventSub channel.follow — фоллоу-уведомления в Chatterino
 ].join(' ');
 
 function getRedirectUri(req: Request): string {
