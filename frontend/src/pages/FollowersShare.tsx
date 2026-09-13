@@ -86,7 +86,7 @@ export default function FollowersShare() {
           </div>
           <div>
             <div style={{ fontSize: '18px', fontWeight: 700, color: 'rgba(255,255,255,0.95)' }}>
-              Даты фоллоу для aFserinno
+              Даты фоллоу
             </div>
             <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
               afsyg.gay — для модераторов
@@ -97,8 +97,8 @@ export default function FollowersShare() {
         {status === 'idle' && (
           <>
             <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.65)', lineHeight: 1.6, marginBottom: '18px' }}>
-              Для модераторов. Один вход через Twitch — и aFserinno показывает
-              даты фоллоу в твоих каналах. Только чтение.
+              Для модераторов. Один вход через Twitch — и даты фоллоу
+              в твоих каналах снова видны. Только чтение.
             </p>
             {button('Войти через Twitch')}
           </>
