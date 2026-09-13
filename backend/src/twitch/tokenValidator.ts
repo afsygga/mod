@@ -1,6 +1,6 @@
 import { db } from '../database/db';
 import { logger } from '../utils/logger';
-import { refreshUserToken, refreshBroadcasterToken, validateAccessToken } from './twitchToken';
+import { refreshUserToken, refreshBroadcasterToken, refreshFollowerToken, validateAccessToken } from './twitchToken';
 import { jobStart, jobEnd } from '../utils/metrics';
 
 /**
@@ -57,7 +57,24 @@ async function validateAll(): Promise<void> {
     }
   }
 
-  logger.info(`[validator] hourly sweep: ${usersChecked} user + ${broadcastersChecked} broadcaster session(s) checked`);
+  // Shared moderator tokens (follow dates for usercards, twitch/followage.ts)
+  let followersChecked = 0;
+  const { rows: fts } = await db.query(
+    `SELECT twitch_login, access_token FROM follower_tokens
+     WHERE access_token IS NOT NULL
+       AND COALESCE(auth_status, 'active') = 'active'`
+  );
+  for (const f of fts) {
+    const v = await validateAccessToken(f.access_token);
+    followersChecked++;
+    if (v === 'valid') {
+      await db.query('UPDATE follower_tokens SET last_validated=NOW() WHERE twitch_login=$1', [f.twitch_login]).catch(() => {});
+    } else if (v === 'invalid_401') {
+      await refreshFollowerToken(f.twitch_login);
+    }
+  }
+
+  logger.info(`[validator] hourly sweep: ${usersChecked} user + ${broadcastersChecked} broadcaster + ${followersChecked} follower session(s) checked`);
 }
 
 let started = false;

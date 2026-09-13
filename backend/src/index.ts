@@ -34,6 +34,8 @@ import { authenticate } from './auth/authMiddleware';
 import { TwitchManager } from './twitch/TwitchManager';
 import { EventSubManager } from './twitch/EventSubManager';
 import { startTokenValidator } from './twitch/tokenValidator';
+import { followageRouter } from './twitch/followageRouter';
+import { startFollowageSync } from './twitch/followage';
 import { register as metricsRegister, setPitProvider, setBuildInfo, setOauthSessions, jobStart, jobEnd, Pit } from './utils/metrics';
 import { TelegramBot } from './telegram/TelegramBot';
 import { wsHandler } from './websocket/wsHandler';
@@ -116,6 +118,8 @@ app.get('/preview-sheet/:id', async (req, res) => {
 app.use('/api/auth', rateLimit(10), authRouter);
 app.use('/api/twitch-creds', twitchCredsRouter);
 app.use('/api/twitch-oauth', twitchOAuthRouter);
+// Follow dates for Chatterino usercards — auth by the client's own Twitch token
+app.use('/api/followage', rateLimit(120), followageRouter);
 app.use('/api/telegram', authenticate, telegramRouter);
 
 // Admin (requires admin)
@@ -290,6 +294,40 @@ async function runMigrations() {
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS twitch_last_validated TIMESTAMPTZ`);
     await db.query(`ALTER TABLE broadcaster_tokens ADD COLUMN IF NOT EXISTS auth_status VARCHAR(32) DEFAULT 'active'`);
     await db.query(`ALTER TABLE broadcaster_tokens ADD COLUMN IF NOT EXISTS last_validated TIMESTAMPTZ`);
+    // Follow dates for Chatterino usercards (twitch/followage.ts, §25):
+    // shared moderator tokens, the channels each can answer for, and a
+    // day-long cache of answers.
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS follower_tokens (
+        twitch_login VARCHAR(64) PRIMARY KEY,
+        twitch_id VARCHAR(32) NOT NULL,
+        access_token TEXT NOT NULL,
+        refresh_token TEXT NOT NULL,
+        auth_status VARCHAR(32) DEFAULT 'active',
+        last_validated TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS follower_channels (
+        channel_id VARCHAR(32) NOT NULL,
+        channel_login VARCHAR(64) NOT NULL,
+        token_login VARCHAR(64) NOT NULL REFERENCES follower_tokens(twitch_login) ON DELETE CASCADE,
+        checked_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (channel_id, token_login)
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS followage_cache (
+        channel_id VARCHAR(32) NOT NULL,
+        user_id VARCHAR(32) NOT NULL,
+        followed_at TIMESTAMPTZ,
+        checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        source_login VARCHAR(64),
+        PRIMARY KEY (channel_id, user_id)
+      )
+    `);
     // Pile-on mutes: a 2nd+ mod muting the same user within 5s of the first is a
     // "secondary" action — counts in per-mod stats but is grouped under the
     // primary log row (primary_id → the primary row's id) instead of showing
@@ -552,6 +590,7 @@ async function start() {
     // stamps last_validated, reactively refreshes confirmed-expired tokens,
     // marks dead grants reauthorization_required.
     startTokenValidator();
+    startFollowageSync();
 
     // ── Prometheus wiring ──────────────────────────────────────────────────
     setBuildInfo(APP_VERSION, process.env.GIT_REVISION || 'unknown');

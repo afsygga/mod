@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { db } from '../database/db';
 import { authenticate } from './authMiddleware';
 import { logger } from '../utils/logger';
+import { syncFollowerChannels } from '../twitch/followage';
 
 export const twitchOAuthRouter = Router();
 
@@ -18,7 +19,7 @@ function signState(payload: Record<string, unknown>): string {
   const sig = crypto.createHmac('sha256', stateSecret()).update(body).digest('base64url');
   return `${body}.${sig}`;
 }
-function verifyState(state: string, expectedFlow: 'user' | 'broadcaster'): any | null {
+function verifyState(state: string, expectedFlow: 'user' | 'broadcaster' | 'followers'): any | null {
   const parts = String(state).split('.');
   if (parts.length !== 2) return null;
   const [body, sig] = parts;
@@ -110,6 +111,11 @@ const BROADCASTER_SCOPES = [
 // success — persisting it would just produce confusing 403s later.
 const REQUIRED_USER_SCOPES = ['chat:read', 'chat:edit', 'channel:moderate', 'moderator:manage:banned_users'];
 const REQUIRED_BROADCASTER_SCOPES = ['channel:manage:broadcast'];
+// Shared moderator token for follow dates in Chatterino usercards (§25):
+// read-only, the two scopes Helix needs to answer "who follows channel X"
+// (moderator:read:followers) and to know which X the user moderates.
+const FOLLOWER_SCOPES = ['moderator:read:followers', 'user:read:moderated_channels'].join(' ');
+const REQUIRED_FOLLOWER_SCOPES = ['moderator:read:followers', 'user:read:moderated_channels'];
 
 function missingScopes(granted: unknown, required: string[]): string[] {
   const have = new Set(Array.isArray(granted) ? granted.map(String) : []);
@@ -264,9 +270,103 @@ twitchOAuthRouter.get('/broadcaster-connect', (req: Request, res: Response) => {
   res.redirect(`https://id.twitch.tv/oauth2/authorize?${params}`);
 });
 
+// ── Followers share (moderators, no site account) ────────────────────────────
+// Same redirect URL as the broadcaster flow (nothing new to register in the
+// Twitch console); the signed state tells the callback which flow it is.
+twitchOAuthRouter.get('/followers-connect', (req: Request, res: Response) => {
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  if (!clientId) return res.status(500).json({ error: 'TWITCH_CLIENT_ID not set' });
+
+  const state = signState({ flow: 'followers' });
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: getBroadcasterRedirectUri(req),
+    response_type: 'code',
+    scope: FOLLOWER_SCOPES,
+    state,
+    force_verify: 'true',
+  });
+  res.redirect(`https://id.twitch.tv/oauth2/authorize?${params}`);
+});
+
+async function followersCallback(req: Request, res: Response): Promise<void> {
+  const { code, error } = req.query;
+  const page = `${getFrontendUrl()}/followers`;
+  if (error) { res.redirect(`${page}?error=${encodeURIComponent(String(error))}`); return; }
+  if (!code) { res.redirect(`${page}?error=missing_code`); return; }
+  try {
+    const clientId = process.env.TWITCH_CLIENT_ID || '';
+    const clientSecret = process.env.TWITCH_CLIENT_SECRET || '';
+    if (!clientSecret) { res.redirect(`${page}?error=not_configured`); return; }
+
+    const tokenRes = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code: String(code),
+        grant_type: 'authorization_code',
+        redirect_uri: getBroadcasterRedirectUri(req),
+      }),
+    });
+    if (!tokenRes.ok) {
+      logger.error('Followers token exchange failed', await tokenRes.text());
+      res.redirect(`${page}?error=token_exchange_failed`); return;
+    }
+    const tokenData: any = await tokenRes.json();
+    const accessToken: string = tokenData.access_token;
+    const refreshToken: string = tokenData.refresh_token;
+    if (typeof accessToken !== 'string' || !accessToken || typeof refreshToken !== 'string' || !refreshToken) {
+      logger.error('Followers token exchange returned incomplete tokens');
+      res.redirect(`${page}?error=incomplete_tokens`); return;
+    }
+    const missing = missingScopes(tokenData.scope, REQUIRED_FOLLOWER_SCOPES);
+    if (missing.length > 0) {
+      logger.warn(`Followers OAuth: grant missing scopes [${missing.join(', ')}]`);
+      res.redirect(`${page}?error=missing_scopes&scopes=${encodeURIComponent(missing.join(' '))}`); return;
+    }
+
+    const userRes = await fetch('https://api.twitch.tv/helix/users', {
+      headers: { 'Client-Id': clientId, 'Authorization': `Bearer ${accessToken}` },
+    });
+    if (!userRes.ok) { res.redirect(`${page}?error=user_fetch_failed`); return; }
+    const twitchUser = ((await userRes.json()) as any).data?.[0];
+    if (!twitchUser) { res.redirect(`${page}?error=no_user_data`); return; }
+
+    const up = await db.query(`
+      INSERT INTO follower_tokens (twitch_login, twitch_id, access_token, refresh_token, auth_status, last_validated, updated_at)
+      VALUES ($1, $2, $3, $4, 'active', NOW(), NOW())
+      ON CONFLICT (twitch_login) DO UPDATE SET access_token=$3, refresh_token=$4, twitch_id=$2,
+        auth_status='active', last_validated=NOW(), updated_at=NOW()
+      RETURNING twitch_login
+    `, [twitchUser.login, twitchUser.id, accessToken, refreshToken]);
+    if (up.rowCount !== 1) {
+      logger.error(`Followers OAuth: upsert wrote ${up.rowCount} rows for ${twitchUser.login}`);
+      res.redirect(`${page}?error=persist_failed`); return;
+    }
+
+    let channels = 0;
+    try { channels = await syncFollowerChannels(twitchUser.login, accessToken, String(twitchUser.id)); }
+    catch (e: any) { logger.warn(`Followers OAuth: channel sync failed for ${twitchUser.login}: ${e?.message || e}`); }
+
+    logger.info(`Followers OAuth connected: ${twitchUser.login} (${channels} channel(s))`);
+    res.redirect(`${page}?success=1&login=${encodeURIComponent(twitchUser.login)}&channels=${channels}`);
+  } catch (err) {
+    logger.error('Followers OAuth callback error', err);
+    res.redirect(`${page}?error=callback_failed`);
+  }
+}
+
 twitchOAuthRouter.get('/broadcaster-callback', async (req: Request, res: Response) => {
   const { code, state, error } = req.query;
   const frontendUrl = getFrontendUrl();
+
+  // The followers flow shares this redirect URL; its state says so.
+  if (state && verifyState(String(state), 'followers')) {
+    await followersCallback(req, res);
+    return;
+  }
 
   if (error) return res.redirect(`${frontendUrl}/broadcaster?error=${encodeURIComponent(String(error))}`);
   if (!code) return res.redirect(`${frontendUrl}/broadcaster?error=missing_code`);

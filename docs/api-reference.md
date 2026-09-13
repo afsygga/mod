@@ -37,6 +37,9 @@
 | GET | `/api/twitch-oauth/callback` | 🌐 | Колбэк user-потока (проверка подписи `state`, [§9](../AGENTS.md)) |
 | GET | `/api/twitch-oauth/broadcaster-connect` | 🌐 | Старт broadcaster-потока (страница `/broadcaster`) |
 | GET | `/api/twitch-oauth/broadcaster-callback` | 🌐 | Колбэк broadcaster-потока |
+| GET | `/api/twitch-oauth/followers-connect` | 🌐 | Старт потока «модератор делится датами фоллоу» (страница `/followers`, [§25](../AGENTS.md)) |
+| GET | `/api/followage?channel=<id>&user=<id>` | 🎫 Twitch-токен клиента | Дата фоллоу для карточки Chatterino: `{available, followed_at, checked_at}` |
+| GET | `/api/followage/channels` | 🎫 Twitch-токен клиента | Каналы, по которым сервис может ответить |
 
 ## Каналы, настройки, whitelist
 

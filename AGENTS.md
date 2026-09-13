@@ -653,6 +653,31 @@ DO NOTHING — заданное админом значение, включая 
 - Метрики: `afsyg_preview_workers_active`, `afsyg_preview_sheets_total{result}`,
   `afsyg_preview_ingest_errors_total{stage}`.
 
+## 25. Даты фоллоу для Chatterino (`twitch/followage.ts`, `/followers`)
+
+С сентября 2026 Twitch отдаёт «когда Y зафолловил канал X» только стримеру X
+или его модераторам (Helix `channels/followers` + `user_id`, скоуп
+`moderator:read:followers`); IVR/DecAPI/GQL закрыты. Чтобы карточки в aFserinno
+показывали дату там, где сам пользователь не мод, модераторы делятся правом:
+
+- **Страница `/followers`** → `GET /api/twitch-oauth/followers-connect` →
+  Twitch с двумя read-only скоупами (`moderator:read:followers`,
+  `user:read:moderated_channels`) → **тот же `broadcaster-callback`** (новый
+  redirect в консоли Twitch не нужен; поток различается по подписанному
+  `state.flow = 'followers'`, проверяется первым).
+- Токен → `follower_tokens` (те же статусы/рефреш/CAS, что у broadcaster:
+  `refreshFollowerToken`, почасовой валидатор). Список каналов токена →
+  `follower_channels` (`moderation/channels` + свой канал), пересинхрон раз в
+  час (`startFollowageSync`, job `followage_sync`).
+- **`GET /api/followage?channel=<id>&user=<id>`** — auth по **Twitch-токену
+  самого клиента** (`Authorization: OAuth …`, валидация через
+  `id.twitch.tv/oauth2/validate`, `client_id` должен быть наш; кэш валидаций
+  час в памяти, rate-limit 120/мин). Ответ `{available, followed_at,
+  checked_at}`; `available:false` = ни одного токена с правами в канале.
+  Ответы кэшируются сутки в `followage_cache`.
+- 401 от Helix → один рефреш + повтор; 403 → пара (канал, токен) удаляется,
+  пробуется следующий токен. Ничего не «врёт»: без прав строки в клиенте нет.
+
 ## 23. Известные хвосты (сделано НЕ всё)
 
 Не считай это реализованным — осознанно отложено:

@@ -215,6 +215,66 @@ export async function refreshBroadcasterToken(login: string): Promise<string | n
 }
 
 /**
+ * Refresh a shared moderator token (follow dates for usercards, see
+ * twitch/followage.ts). Same CAS / single-flight / cooldown rules as the
+ * broadcaster path, on the follower_tokens table.
+ */
+export async function refreshFollowerToken(login: string): Promise<string | null> {
+  const key = `f:${login.toLowerCase()}`;
+  return singleFlight(key, async () => {
+    if (Date.now() - (lastRefreshAt.get(key) || 0) < REFRESH_COOLDOWN_MS) {
+      const { rows } = await db.query('SELECT access_token FROM follower_tokens WHERE twitch_login=$1', [login]);
+      return rows[0]?.access_token || null;
+    }
+
+    const { rows } = await db.query(
+      'SELECT refresh_token, auth_status FROM follower_tokens WHERE twitch_login=$1', [login]
+    );
+    const refresh = rows[0]?.refresh_token;
+    if (!refresh) return null;
+    if (rows[0]?.auth_status === 'reauthorization_required') return null;
+
+    const r = await doRefresh(refresh);
+    if (!r.ok) {
+      if (r.kind === 'invalid') {
+        await db.query(
+          "UPDATE follower_tokens SET auth_status='reauthorization_required' WHERE twitch_login=$1", [login]
+        ).catch(() => {});
+        logger.warn(`[token] follower ${login}: refresh token invalid — reauthorization required`);
+        recordTokenRefresh('follower', 'invalid_grant');
+      } else {
+        recordTokenRefresh('follower', r.kind === 'malformed' ? 'malformed_response' : 'temporary_error');
+      }
+      return null;
+    }
+
+    let rowCount: number | null = null;
+    try {
+      const upd = await db.query(
+        `UPDATE follower_tokens SET access_token=$1, refresh_token=$2,
+                                    auth_status='active', last_validated=NOW(), updated_at=NOW()
+         WHERE twitch_login=$3 AND refresh_token=$4`,
+        [r.access, r.refresh, login, refresh]
+      );
+      rowCount = upd.rowCount;
+    } catch (e: any) {
+      logger.error(`[token] follower ${login}: refresh persist FAILED (${e?.message || e}) — discarding new token`);
+      recordTokenRefresh('follower', 'db_error');
+      return null;
+    }
+    if (rowCount !== 1) {
+      logger.warn(`[token] follower ${login}: credentials changed concurrently (rowCount=${rowCount}) — discarding stale refresh result`);
+      recordTokenRefresh('follower', 'cas_conflict');
+      return null;
+    }
+    lastRefreshAt.set(key, Date.now());
+    recordTokenRefresh('follower', 'success');
+    logger.info(`[token] refreshed follower token for ${login}`);
+    return r.access;
+  });
+}
+
+/**
  * App access token (client credentials). Works for public Helix endpoints
  * like /streams and /users, is mintable at any time from client id+secret and
  * can never be permanently lost — the last-resort candidate that keeps stream
