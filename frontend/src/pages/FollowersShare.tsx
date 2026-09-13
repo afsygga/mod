@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Twitch, Check, AlertTriangle, Heart, Lock, Eye } from 'lucide-react';
+import { Twitch, Check, AlertTriangle, Heart } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 // Человеческая расшифровка кодов ошибок followers-колбэка
@@ -96,23 +96,10 @@ export default function FollowersShare() {
 
         {status === 'idle' && (
           <>
-            <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.65)', lineHeight: 1.6, marginBottom: '14px' }}>
-              Twitch показывает, когда человек зафолловил канал, только его
-              <b style={{ color: 'rgba(255,255,255,0.85)' }}> модераторам</b>. Если ты модератор,
-              один вход здесь — и карточки пользователей в aFserinno снова показывают
-              «Following since» в твоих каналах.
+            <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.65)', lineHeight: 1.6, marginBottom: '18px' }}>
+              Для модераторов. Один вход через Twitch — и aFserinno показывает
+              даты фоллоу в твоих каналах. Только чтение.
             </p>
-            <div style={{
-              display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px',
-              padding: '12px 14px', borderRadius: '12px',
-              background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
-              fontSize: '12.5px', color: 'rgba(255,255,255,0.6)', lineHeight: 1.5,
-            }}>
-              <div style={{ display: 'flex', gap: '9px' }}><Eye size={15} style={{ flexShrink: 0, marginTop: '1px', color: '#ff6b8a' }} />
-                <span>Только чтение: <Code>moderator:read:followers</Code> и <Code>user:read:moderated_channels</Code>. Ничего писать, банить или менять от твоего имени нельзя.</span></div>
-              <div style={{ display: 'flex', gap: '9px' }}><Lock size={15} style={{ flexShrink: 0, marginTop: '1px', color: '#ff6b8a' }} />
-                <span>Работает во всех каналах, где ты мод, пока ты там мод. Отозвать можно в настройках Twitch → Подключения.</span></div>
-            </div>
             {button('Войти через Twitch')}
           </>
         )}
@@ -128,9 +115,6 @@ export default function FollowersShare() {
                 Готово, <b>{login}</b>. Каналов с твоими правами: <b>{channels}</b>.
               </div>
             </div>
-            <p style={{ fontSize: '12.5px', color: 'rgba(255,255,255,0.5)', lineHeight: 1.6, marginBottom: '18px' }}>
-              Список каналов обновляется раз в час. Если тебя замодят где-то ещё, оно подхватится само.
-            </p>
             {button('Войти другим аккаунтом')}
           </>
         )}
